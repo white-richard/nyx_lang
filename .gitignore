@@ -1,3 +1,4 @@
+tmp.md
 # Zig build artifacts
 zig-cache/
 .zig-cache/
@@ -17,6 +18,7 @@ build-*/
 *.dylib
 *.dll
 *.nyac
+ass.s
 
 # Temporary files
 *.tmp

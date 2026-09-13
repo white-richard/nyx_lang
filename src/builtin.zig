@@ -131,8 +131,8 @@ pub fn built_in_types(
     const VOID_node = try allocator.create(ast.Node);
     VOID_node.* = .{ .Type = VOID };
 
-    const catgirl = try allocator.create(ast.TypeNode);
-    catgirl.* = ast.TypeNode{
+    const bool_type = try allocator.create(ast.TypeNode);
+    bool_type.* = ast.TypeNode{
         .is_unsigned = false,
         .is_const = false,
         .qualifier = 0, // 0 none, 1 long, 2 long long
@@ -140,8 +140,8 @@ pub fn built_in_types(
         .size = @sizeOf(bool),
         .alignment = @alignOf(bool),
     };
-    const catgirl_node = try allocator.create(ast.Node);
-    catgirl_node.* = .{ .Type = catgirl };
+    const bool_type_node = try allocator.create(ast.Node);
+    bool_type_node.* = .{ .Type = bool_type };
 
     const printf_node = try allocator.create(ast.FunctionNode);
     const nameparm = try allocator.create(ast.NameParameterNode);
@@ -158,7 +158,6 @@ pub fn built_in_types(
     const ret_node = try allocator.create(ast.Node);
     ret_node.* = ast.Node{ .Function = printf_node };
 
-    // ur shiii
     const block_node = try allocator.create(ast.Node);
     const builtin_block = try allocator.create(ast.BlockItemsNode);
     var bl_items: std.ArrayList(*ast.Node) = .empty;
@@ -167,7 +166,7 @@ pub fn built_in_types(
             &[_]*ast.Node{int32_Node, int64_node, int128_node, 
             uint32_node, uint64_node, uint128_node, 
             float32_node, float64_node, charu8_node, 
-            VOID_node, catgirl_node, ret_node, root}
+            VOID_node, bool_type_node, ret_node, root}
     );
     builtin_block.* = ast.BlockItemsNode{ .items = try bl_items.toOwnedSlice(allocator) };
     block_node.* = ast.Node{ .BlockItems = builtin_block };

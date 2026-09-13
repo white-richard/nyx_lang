@@ -1,22 +1,21 @@
 const std = @import("std");
 
-const test_targets = [_]std.Target.Query{
-    .{}, // native
-};
-
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // --- generate parser/lexer into src/ explicitly ---
-    const bison = b.addSystemCommand(&.{ "bison", "-d", "-Wnone", "-o" });
-    bison.addFileArg(b.path("src/c11.tab.c"));  // -o <outfile>
+    // ----- Parser and lexer generation (outputs go to the build cache) -----
+    const bison = b.addSystemCommand(&.{ "bison", "-Wnone", "-o" });
+    const parser_c = bison.addOutputFileArg("c11.tab.c");
+    const parser_h = bison.addPrefixedOutputFileArg("--defines=", "c11.tab.h");
     bison.addFileArg(b.path("src/c11.y"));
+    const generated_include_dir = parser_h.dirname();
 
     const flex = b.addSystemCommand(&.{ "flex", "-o" });
-    flex.addFileArg(b.path("src/lex.yy.c"));  // -o <outfile>
+    const lexer_c = flex.addOutputFileArg("lex.yy.c");
     flex.addFileArg(b.path("src/c11.l"));
 
+    // ----- Compiler executable -----
     const exe = b.addExecutable(.{
         .name = "NyxLang",
         .version = .{ .major = 0, .minor = 2, .patch = 0 },
@@ -26,49 +25,52 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-
-    // compile generated C sources from src/
-    exe.addCSourceFile(.{ .file = b.path("src/c11.tab.c"), .flags = &.{} });
-    exe.addCSourceFile(.{ .file = b.path("src/lex.yy.c"), .flags = &.{} });
+    exe.addCSourceFile(.{ .file = parser_c, .flags = &.{} });
+    exe.addCSourceFile(.{ .file = lexer_c, .flags = &.{} });
+    exe.addIncludePath(generated_include_dir);
     exe.linkLibC();
-    exe.addIncludePath(b.path("src"));
-
-    // make exe depend on the generators
-    exe.step.dependOn(&bison.step);
-    exe.step.dependOn(&flex.step);
-
     b.installArtifact(exe);
 
-    // ----- Run the app -----
-    const run_step = b.step("run", "Run the app");
+    // ----- zig build run -- <source-file> [flags] -----
     const run_cmd = b.addRunArtifact(exe);
-    run_step.dependOn(&run_cmd.step);
-    if (b.args) |args| run_cmd.addArgs(args);
     run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| run_cmd.addArgs(args);
 
-    // ----- Run Tests ----- // TODO not working
-    // const test_step = b.step("test", "Run unit tests");
-    //
-    // for (test_targets) |tar| {
-    //     const unit_tests = b.addTest(.{
-    //         .root_module = b.createModule(.{
-    //             .root_source_file = b.path("src/symbolTable_test.zig"),
-    //             .target = b.resolveTargetQuery(tar),
-    //             .optimize = optimize,
-    //         }),
-    //     });
-    //
-    //     unit_tests.addCSourceFile(.{ .file = b.path("src/c11.tab.c"), .flags = &.{} });
-    //     unit_tests.addCSourceFile(.{ .file = b.path("src/lex.yy.c"), .flags = &.{} });
-    //     unit_tests.linkLibC();
-    //     unit_tests.addIncludePath(b.path("src"));
-    //
-    //     // Ensure C files are generated before compiling tests:
-    //     unit_tests.step.dependOn(&bison.step);
-    //     unit_tests.step.dependOn(&flex.step);
-    //
-    //     const run_unit_tests = b.addRunArtifact(unit_tests);
-    //     run_unit_tests.skip_foreign_checks = true; // ?
-    //     test_step.dependOn(&run_unit_tests.step);
-    // }
+    const run_step = b.step("run", "Run the compiler");
+    run_step.dependOn(&run_cmd.step);
+
+    // ----- zig build test: unit tests -----
+    const unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/test_scope.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    // ast.zig imports the Bison-generated token header.
+    unit_tests.addIncludePath(generated_include_dir);
+    unit_tests.linkLibC();
+
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&b.addRunArtifact(unit_tests).step);
+
+    // ----- zig build smoke: run the compiler against tests/fixtures -----
+    const smoke_config = b.addOptions();
+    smoke_config.addOptionPath("compiler", exe.getEmittedBin());
+    smoke_config.addOptionPath("fixtures_dir", b.path("tests/fixtures"));
+
+    const smoke_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/smoke.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "smoke_config", .module = smoke_config.createModule() }},
+        }),
+    });
+    const run_smoke = b.addRunArtifact(smoke_tests);
+    // Fixture edits do not change the test binary, so always rerun.
+    run_smoke.has_side_effects = true;
+
+    const smoke_step = b.step("smoke", "Run compiler smoke tests against tests/fixtures");
+    smoke_step.dependOn(&run_smoke.step);
 }

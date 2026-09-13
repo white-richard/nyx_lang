@@ -6,7 +6,7 @@ int y = 200;
 int z = 900;
 
 // Test Case 5
-int josh() {
+int logical_not() {
     int x = 5;
     return !x;
 }
@@ -14,12 +14,12 @@ int josh() {
 // Test Case 3
 int main() {
     if(x == 0) {
-        printf("Your mom");
+        printf("x is zero\n");
     } else {
-        printf("Your dad");
+        printf("x is nonzero\n");
     }
     while(x < 20) {
-        printf("Yooooo\n");
+        printf("loop\n");
         x++;
         ++x;
     }

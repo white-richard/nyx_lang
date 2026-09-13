@@ -6,7 +6,7 @@ const ast = @import("ast.zig");
 const analyzer = @import("semanticAnalyzer.zig");
 const c = @cImport(@cInclude("c11.tab.h"));
 const bi = @import("builtin.zig");
-const nya = @import("3ac.zig");
+const ir = @import("3ac.zig");
 const asmb = @import("assembler.zig");
 
 pub const YY_BUFFER_STATE = *opaque {};
@@ -77,7 +77,6 @@ fn _main() !void {
 
     const new_root = try bi.built_in_types(parse_alloc, root.?);
 
-    // std.debug.print("\n\n\n \x1b[1;33mPARSE/AST PRINTOUT\x1b[0m Nya Nya Meow Meow\n", .{});
     if (ast.debug_mode) {
         std.debug.print("\n\n\n\x1b[1;33mPARSE/AST PRINTOUT\x1b[0m DEBUG MODE ENABLED\n", .{});
         try ast.printNode(new_root, 0);
@@ -89,12 +88,12 @@ fn _main() !void {
         };
 
         if (ast.debug_mode) std.debug.print("\n\x1b[1;33m3AC COMPILATION PRINTOUT\x1b[0m\n", .{});
-        const compiler: *nya.Compiler = nya.Compiler.init(parse_alloc, r) catch |err| {
+        const compiler: *ir.Compiler = ir.Compiler.init(parse_alloc, r) catch |err| {
             std.debug.print("3AC compilation failed: {s}\n", .{@errorName(err)});
             return;
         };
 
-        const nyac_list: *std.ArrayList(nya.NYAC) = try compiler.compile();
+        const nyac_list: *std.ArrayList(ir.NYAC) = try compiler.compile();
         // Assembler
         if (assemble_flag) try asmb.assemble(parse_alloc, nyac_list.items);
 
@@ -115,7 +114,7 @@ pub fn diagnostic_source(line_no: usize) []const u8 {
     var start: usize = 0;
     var i: usize = 0;
 
-    // 1️⃣ Seek to beginning of the requested line
+    // Seek to the beginning of the requested line
     while (i < source_code.len and current_line < line_no) {
         if (source_code[i] == '\n') {
             current_line += 1;
@@ -132,7 +131,7 @@ pub fn diagnostic_source(line_no: usize) []const u8 {
         start += 1;
     }
 
-    // 2️⃣ Find end of line or EOF
+    // Find the end of the line or EOF
     var end = start;
     while (end < source_code.len and source_code[end] != '\n') {
         end += 1;
@@ -153,7 +152,7 @@ fn get_src() []const u8 {
         }
         idx += 1;
     }
-    // WE ARE STOPPED AT THE CURRENT LINE!
+    // idx is now just past the newline that ends the current line.
     return source_code[line_length .. idx - 1];
 }
 

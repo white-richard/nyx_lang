@@ -66,8 +66,6 @@ pub const NYAC = struct { return_addr: Register, instruction: Instruction, op1: 
 var registers: std.ArrayList(Value) = .empty;
 var nyac_list: std.ArrayList(NYAC) = .empty;
 
-// Pre-allocation to Registers
-
 // =======================
 // ==    3AC EMISSION   ==
 // =======================
@@ -75,7 +73,6 @@ var nyac_list: std.ArrayList(NYAC) = .empty;
 //  Indices into registers[] list is reserved from 0-8
 //  Please be mindful of which index you use. If you need
 //  extra registers start from 9.
-// pub struct  make this a struct for sharing and recalling
 pub const Compiler = struct {
     alloc: std.mem.Allocator,
     root: *ast.Node,
@@ -368,7 +365,7 @@ pub const Compiler = struct {
                 if (spec.Type.size > 0) {
                     struct_size = spec.Type.size;
                     if (ast.debug_mode) {
-                        std.debug.print("Handling type with size: {d} bytes (prob always struct?)\n", .{struct_size});
+                        std.debug.print("Handling type with size: {d} bytes\n", .{struct_size});
                     }
                 }
             }
@@ -378,7 +375,7 @@ pub const Compiler = struct {
                 if (struct_spec.typeNode) |tn| {
                     struct_size = tn.size;
 
-                    // TODO store field offsets here too i think. i dont know where it would go tho
+                    // TODO: Track struct field offsets in the IR representation.
 
                     if (struct_spec.identifier) |id| {
                         const struct_name = id.Identifier.name;
@@ -389,7 +386,7 @@ pub const Compiler = struct {
                 }
             } else if (spec.* == .Type) {
                 if (ast.debug_mode) {
-                    std.debug.print("Handling normie type declaration\n", .{});
+                    std.debug.print("Handling Type node declaration\n", .{});
                 }
             }
         }
@@ -441,7 +438,7 @@ pub const Compiler = struct {
                     }
                 },
                 .Type => blk: {
-                    break :blk ""; // TODO handle instead of ""
+                    break :blk ""; // TODO: Type declarators currently get an empty name.
                 },
                 else => {
                     if (ast.debug_mode) std.debug.print("Unsupported declarator type: {s}\n", .{@tagName(ar.Assignment.declarator.*)});
@@ -591,10 +588,10 @@ pub const Compiler = struct {
                 }
             },
             .Unary => blk: {
-                break :blk ""; // TODO like *p = val
+                break :blk ""; // dereference assignment (*p = val) is handled below
             },
             .Type => blk: {
-                break :blk ""; // TODO
+                break :blk ""; // TODO: Assignments to a Type declarator emit no IR.
             },
             else => {
                 if (ast.debug_mode) std.debug.print("Unsupported declarator in assignment: {s}\n", .{@tagName(root.declarator.*)});
@@ -645,7 +642,7 @@ pub const Compiler = struct {
                 else => return try self.compile_expr(izer),
             };
 
-            // TODO different NYAC structs probably need to be created here for StoreByte, StoreDouble, depending on type
+            // TODO: Emit width-specific stores (byte, double word) based on the variable type.
             const nyac = NYAC{
                 .instruction = .StoreRegister,
                 .return_addr = lhs_reg,
@@ -744,7 +741,8 @@ pub const Compiler = struct {
         const name = root.nameParam.NameParameterNode.name.Identifier.name;
 
         if (std.mem.eql(u8, name, "printf")) {
-            // should prob bug it a custom external instrubtion name so can can handle it easier in RA
+            // TODO: Represent printf as a dedicated external-call instruction so
+            // register allocation can handle it separately.
             return Unused;
         }
 
@@ -1047,7 +1045,7 @@ pub const Compiler = struct {
         }
         // Actually emit a RETURN instruction
         const nyac = NYAC{
-            .instruction = .Return, // You'll need to add this to Instruction enum
+            .instruction = .Return,
             .return_addr = Unused,
             .op1 = NYACOperand{ .Register = return_reg },
             .op2 = NYACOperand{ .Register = Unused },
@@ -1123,9 +1121,9 @@ pub const Compiler = struct {
         const op_str: []const u8 = std.mem.span(root.logicalOperator);
         // Determine the instruction based on logical operator
         const instr = if (std.mem.eql(u8, op_str, "&&"))
-            Instruction.And // You'll need to add this to your Instruction enum
+            Instruction.And
         else if (std.mem.eql(u8, op_str, "||"))
-            Instruction.Or // You'll need to add this to your Instruction enum
+            Instruction.Or
         else if (std.mem.eql(u8, op_str, "=="))
             Instruction.Equals
         else if (std.mem.eql(u8, op_str, "!="))
@@ -1233,7 +1231,6 @@ pub const Compiler = struct {
             // else => "INVALID"
         });
 
-        // should be using appendSlice for strings
         var tmp: []const u8 = "";
         if (inst.return_addr == 0) {
             tmp = try std.fmt.allocPrint(self.alloc, " -", .{});
@@ -1255,7 +1252,7 @@ pub const Compiler = struct {
                 tmp = try std.fmt.allocPrint(self.alloc, " \"{s}\"", .{label});
             },
             .Value => |label| {
-                // TODO is there a better way to do this? No I don't think it is that bad
+                // TODO: Share operand formatting between op1 and op2.
                 switch (label) {
                     .Float => |flt| {
                         tmp = try std.fmt.allocPrint(self.alloc, " {d}", .{flt});
@@ -1290,7 +1287,6 @@ pub const Compiler = struct {
                 tmp = try std.fmt.allocPrint(self.alloc, " \"{s}\")", .{label});
             },
             .Value => |label| {
-                // TODO is there a better way to do this? No I don't think it is that bad
                 switch (label) {
                     .Float => |flt| {
                         tmp = try std.fmt.allocPrint(self.alloc, " {d}", .{flt});

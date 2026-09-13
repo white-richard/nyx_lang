@@ -77,7 +77,7 @@ int prefix_and_unary_demo(int n)
 }
 
 /*
-Struct stuff
+Structs
 */
 // Test 1: Basic struct definition
 struct Point
@@ -224,7 +224,7 @@ int main(void)
 
     final + 1;
 
-    // struct stuff
+    // structs
     struct Point p1;
     struct Mixed m1;
     struct Outer o1;
@@ -243,7 +243,7 @@ int main(void)
     // // wa.name[0] = 'T';
     // // -----
 
-    // josh.nyx
+    // same program as factorial.nyx
     int num = 5;
     int x;
     printf("Factorial of %d = %llu\n", num, factorial(num));

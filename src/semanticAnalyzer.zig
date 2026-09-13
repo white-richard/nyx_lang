@@ -494,7 +494,6 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                 else => {},
             }
             if (assgn.initializer) |init| {
-                // where we would check the box that
                 semantic_analyze_node(init) catch |err| {
                     if (ast.debug_mode) std.debug.print("Semantic Failure: {any}\n", .{err});
                     return;
@@ -620,9 +619,7 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                 };
             }
 
-            // TODO might need to add this later to type check
-            // semantic_analyze_node(func.typeNode);
-            // semantic_analyze_node(func.retType);
+            // TODO: Analyze the function's declared return type.
         },
         .FunctionCall => {
             if (ast.debug_mode)
@@ -701,7 +698,7 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                 setSymbolTable(pt);
             }
         },
-        // TODO everything below this gets to do cool fun stuff w/ type checking (probably others too)
+        // Expression nodes. Type checking is performed from here on.
         .Binary => {
             const binary = node.Binary;
             semantic_analyze_node(binary.lhs) catch |err| {
@@ -920,30 +917,6 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                 };
             }
         },
-        //     StructDeclaration: *StructDeclarationNode,
-        // StructDeclarationList: *StructDeclarationListNode,
-        // StructDeclaratorList: *StructDeclaratorListNode,
-        // StructSpecifier: *StructSpecifierNode,
-        // StructOrUnion: *StructOrUnionNode,
-        // .Struct => {
-        //     if (ast.debug_mode) std.debug.print("Struct node semantically analyzed!\n", .{});
-        //     const struct_node = node.Struct;
-        //     if (struct_node.name) |name| {
-        //         semantic_analyze_node(name);
-        //     }
-        //     if (struct_node.decl_list) |list| {
-        //         for (list) |item| {
-        //             semantic_analyze_node(item);
-        //         }
-        //     }
-        // },
-        // .StructDeclarationList => { // unwraped and not an AST node.
-        //     if (ast.debug_mode) std.debug.print("StructDecl node semantically analyzed!\n", .{});
-        //     const struct_decl = node.StructDecl;
-        //     for (struct_decl.decl_list) |decl| {
-        //         semantic_analyze_node(decl);
-        //     }
-        // },
         .StructDeclaration => {
             if (ast.debug_mode) std.debug.print("StructDeclaration node semantically analyzed!\n", .{});
             const struct_decl = node.StructDeclaration;
@@ -958,20 +931,6 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                 };
             }
         },
-        // .StructDeclaratorList => { // unwraped and not a AST node
-        //     if (ast.debug_mode) std.debug.print("StructDeclaratorList node semantically analyzed!\n", .{});
-        //     const decl_list = node.StructDeclaratorList;
-        //     for (decl_list.declarators) |decl| {
-        //         semantic_analyze_node(decl);
-        //     }
-        // },
-        // .StructDeclList => { // unwrapped and not an AST node
-        //     if (ast.debug_mode) std.debug.print("StructDeclList node semantically analyzed!\n", .{});
-        //     const decl_list = node.StructDeclList;
-        //     for (decl_list.decl_list) |decl| {
-        //         semantic_analyze_node(decl);
-        //     }
-        // },
         .TranslationUnitList => {
             if (ast.debug_mode) std.debug.print("TranslationUnitList node semantically analyzed!\n", .{});
             const translationList = node.TranslationUnitList;
@@ -982,7 +941,7 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                 };
             }
         },
-        // everything below this is an "atomic" node and doesn't call anymore nodes
+        // Leaf nodes: these do not analyze any child nodes.
         .Identifier => {
             const ident = node.Identifier;
 
@@ -1046,8 +1005,8 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
             if (ast.debug_mode) std.debug.print("Float node semantically analyzed!\n", .{});
         },
         .Type => {
-            // TODO BUG shouldn't want every syntactic Type node to create/register a type
-            // we should only register definitions
+            // BUG: Every syntactic Type node registers a type here; only type
+            // definitions should be registered.
             st().assign_type(node.Type) catch {
                 log.Error(
                     node.Type.location.?.col,
@@ -1133,7 +1092,6 @@ pub fn resolve_common_type(type1: ?*ast.Node, type2: ?*ast.Node) ?*ast.TypeNode 
         return st().get_type(zig_str2);
     } else {
         if (ast.debug_mode) std.debug.print("Type 2 Unsigned promotes to Signed\n", .{});
-        // const my_type = st().get_type(zig_str1);
         return st().get_type(zig_str1);
     }
 }

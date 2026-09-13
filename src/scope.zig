@@ -173,9 +173,9 @@ pub const SymbolTable = struct {
 
     pub fn print_sym_tables(self: *SymbolTable) void {
         std.debug.print("\n\n--- Symbol Table ---\n", .{});
-        dumpMap("🐱types", self.type_map);
-        dumpMap("🐈variables", self.variable_map);
-        dumpMap("😹functions", self.function_map);
+        dumpMap("types", self.type_map);
+        dumpMap("variables", self.variable_map);
+        dumpMap("functions", self.function_map);
         std.debug.print("--------------------\n\n", .{});
     }
     fn dumpMap(comptime label: []const u8, map: anytype) void {

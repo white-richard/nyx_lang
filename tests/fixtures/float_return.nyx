@@ -3,5 +3,5 @@ float foo() {
 }
 
 int main() {
-    float yippee = foo();
+    float result = foo();
 }

@@ -1,31 +1,26 @@
 const std = @import("std");
-const nya = @import("3ac.zig");
+const ir = @import("3ac.zig");
 const ast = @import("ast.zig");
 
-// Not sure what to think about this yet:
-// zig cc -target riscv64-freestanding -c ass.s -o ass.o
-// llvm-objdump -d ass.o
+// Inspecting the generated assembly:
+//   zig cc -target riscv64-freestanding -c ass.s -o ass.o
+//   llvm-objdump -d ass.o
+//
+// Running it under user-mode emulation (requires qemu-riscv64):
+//   zig cc -target riscv64-linux-musl -static -O0 ass.s -o a.out
+//   qemu-riscv64 ./a.out; echo $?
 
-// This is more of a full emulator though, is it a better option?
-// qemu-riscv64
-// sudo pacman -S qemu-user
-// zig cc -target riscv64-linux-musl -static -O0 ass.s -o a.out
-// qemu-riscv64 ./a.out
-// echo $?
-// should return 5
-
-// TODO Need to move return values to a0
-// TODO we are using x1/s1 but this should be a callee saved register. We need the prelonngs and prolouge and stuff
-
-// TODO need .globl
-
-
-
-// What was the reasoning behind 32 instead of 64 again?
+// TODO: Move return values into a0.
+// TODO: The allocator hands out callee-saved registers (s0-s11) without
+// saving them. Preserve callee-saved registers and emit the required
+// function prologue and epilogue.
+// TODO: Emit .globl directives for exported symbols.
+// TODO: Loads and stores are emitted as 32-bit lw/sw. Verify whether they
+// should use 64-bit width on riscv64.
 
 pub fn assemble(
     alloc: std.mem.Allocator,
-    nyac: []const nya.NYAC,
+    nyac: []const ir.NYAC,
 ) !void {
     // 1. Allocate registers
     const allocated = try allocate_registers(alloc, nyac);
@@ -39,7 +34,7 @@ pub fn assemble(
     try emit_assembly(alloc, riscv, "ass.s");
 }
 
-// These are the actual physical regiesters that we are assign
+// Physical registers available to the allocator.
 const PHYS_REGS = [_]u8{
     // Avoid x0 (zero), x1 (ra), x2 (sp)
     5, 6, 7, // t0–t2
@@ -50,8 +45,8 @@ const PHYS_REGS = [_]u8{
 
 fn allocate_registers(
     alloc: std.mem.Allocator,
-    nyac: []const nya.NYAC,
-) ![]nya.NYAC {
+    nyac: []const ir.NYAC,
+) ![]ir.NYAC {
     const temp_count = find_max_temp(nyac) + 1;
 
     // 1. Liveness analysis
@@ -75,7 +70,7 @@ fn allocate_registers(
 
 fn analyze_lifetimes(
     alloc: std.mem.Allocator,
-    nyac: []const nya.NYAC,
+    nyac: []const ir.NYAC,
     temp_count: usize,
 ) ![]std.bit_set.DynamicBitSet {
     var live_now = try std.bit_set.DynamicBitSet.initEmpty(alloc, temp_count);
@@ -96,7 +91,7 @@ fn analyze_lifetimes(
         live_list[i] = try live_now.clone(alloc);
 
         // Defs kill liveness
-        if (inst.return_addr != nya.Unused) {
+        if (inst.return_addr != ir.Unused) {
             live_now.unset(inst.return_addr);
         }
 
@@ -114,7 +109,7 @@ fn analyze_lifetimes(
 
 fn build_interference_graph(
     alloc: std.mem.Allocator,
-    nyac: []const nya.NYAC,
+    nyac: []const ir.NYAC,
     live_list: []const std.bit_set.DynamicBitSet,
     temp_count: usize,
 ) ![]std.ArrayList(usize) {
@@ -131,7 +126,7 @@ fn build_interference_graph(
 
     // For each instruction, the defined register interferes with all live registers
     for (nyac, 0..) |inst, i| {
-        if (inst.return_addr == nya.Unused) continue;
+        if (inst.return_addr == ir.Unused) continue;
 
         const def = inst.return_addr;
         var iter = live_list[i].iterator(.{});
@@ -201,16 +196,16 @@ fn free_graph(alloc: std.mem.Allocator, graph: []std.ArrayList(usize)) void {
 
 fn rewrite_registers(
     alloc: std.mem.Allocator,
-    nyac: []const nya.NYAC,
+    nyac: []const ir.NYAC,
     coloring: []const usize,
-) ![]nya.NYAC {
-    var result = try alloc.alloc(nya.NYAC, nyac.len);
+) ![]ir.NYAC {
+    var result = try alloc.alloc(ir.NYAC, nyac.len);
     var is_slot = try alloc.alloc(bool, coloring.len);
     defer alloc.free(is_slot);
     @memset(is_slot, false);
 
     for (nyac) |inst| {
-        if (inst.instruction == .ImbueRegister and inst.return_addr != nya.Unused) {
+        if (inst.instruction == .ImbueRegister and inst.return_addr != ir.Unused) {
             is_slot[inst.return_addr] = true;
         }
     }
@@ -219,7 +214,7 @@ fn rewrite_registers(
         result[i] = inst;
 
         // Map virtual register to physical register
-        if (inst.return_addr != nya.Unused and !is_slot[inst.return_addr]) {
+        if (inst.return_addr != ir.Unused and !is_slot[inst.return_addr]) {
             const c = coloring[inst.return_addr];
             result[i].return_addr = PHYS_REGS[c];
         }
@@ -236,11 +231,11 @@ fn rewrite_registers(
     return result;
 }
 
-fn find_max_temp(nyac: []const nya.NYAC) usize {
+fn find_max_temp(nyac: []const ir.NYAC) usize {
     var max: usize = 0;
 
     for (nyac) |inst| {
-        if (inst.return_addr != nya.Unused and inst.return_addr > max) {
+        if (inst.return_addr != ir.Unused and inst.return_addr > max) {
             max = inst.return_addr;
         }
         if (inst.op1 == .Register and inst.op1.Register > max) {
@@ -305,7 +300,7 @@ const Op = enum {
 
 fn lower_to_riscv(
     alloc: std.mem.Allocator,
-    nyac: []const nya.NYAC,
+    nyac: []const ir.NYAC,
 ) !std.ArrayList(RiscVInst) {
     var out = std.ArrayList(RiscVInst).empty;
 
@@ -328,8 +323,8 @@ fn lower_to_riscv(
     }
 
     const fs = align16(frame_size);
-    // PASS 2:
 
+    // PASS 2: lower each NYAC instruction
     for (nyac) |inst| {
         switch (inst.instruction) {
             //////////////////////////////
@@ -520,12 +515,10 @@ fn emit_assembly(alloc: std.mem.Allocator, riscv: std.ArrayList(RiscVInst), outp
         switch (inst.op) {
             .label => {
                 try writer.print("{s}:\n", .{inst.label});
-                // if (ast.debug_mode) try std.debug.print("{s}:\n", .{inst.label});
             },
 
             .li => {
                 try writer.print("    li x{d}, {d}\n", .{ inst.rd, inst.imm });
-                // if (ast.debug_mode) try std.debug.print("    li x{d}, {d}\n", .{ inst.rd, inst.imm });
             },
 
             // 3-register ALU ops
@@ -534,10 +527,6 @@ fn emit_assembly(alloc: std.mem.Allocator, riscv: std.ArrayList(RiscVInst), outp
                     "    {s} x{d}, x{d}, x{d}\n",
                     .{ @tagName(inst.op), inst.rd, inst.rs1, inst.rs2 },
                 );
-                // if (ast.debug_mode) try std.debug.print(
-                //     "    {s} x{d}, x{d}, x{d}\n",
-                //     .{ @tagName(inst.op), inst.rd, inst.rs1, inst.rs2 },
-                // );
             },
 
             // branches
@@ -546,10 +535,6 @@ fn emit_assembly(alloc: std.mem.Allocator, riscv: std.ArrayList(RiscVInst), outp
                     "    {s} x{d}, x{d}, {s}\n",
                     .{ @tagName(inst.op), inst.rs1, inst.rs2, inst.label },
                 );
-                // if (ast.debug_mode) try std.debug.print(
-                //     "    {s} x{d}, x{d}, {s}\n",
-                //     .{ @tagName(inst.op), inst.rs1, inst.rs2, inst.label },
-                // );
             },
 
             // jumps
@@ -558,10 +543,6 @@ fn emit_assembly(alloc: std.mem.Allocator, riscv: std.ArrayList(RiscVInst), outp
                     "    jal x{d}, {s}\n",
                     .{ inst.rd, inst.label },
                 );
-                // if (ast.debug_mode) try std.debug.print(
-                //     "    jal x{d}, {s}\n",
-                //     .{ inst.rd, inst.label },
-                // );
             },
 
             // loads
@@ -570,10 +551,6 @@ fn emit_assembly(alloc: std.mem.Allocator, riscv: std.ArrayList(RiscVInst), outp
                     "    lw x{d}, {d}(x{d})\n",
                     .{ inst.rd, inst.offset, inst.rs1 },
                 );
-                // if (ast.debug_mode) try std.debug.print(
-                //     "    lw x{d}, {d}(x{d})\n",
-                //     .{ inst.rd, inst.offset, inst.rs1 },
-                // );
             },
 
             // stores
@@ -582,20 +559,14 @@ fn emit_assembly(alloc: std.mem.Allocator, riscv: std.ArrayList(RiscVInst), outp
                     "    sw x{d}, {d}(x{d})\n",
                     .{ inst.rs2, inst.offset, inst.rs1 },
                 );
-                // if (ast.debug_mode) try std.debug.print(
-                //     "    sw x{d}, {d}(x{d})\n",
-                //     .{ inst.rs2, inst.offset, inst.rs1 },
-                // );
             },
 
             .addi => {
                 try writer.print("    addi x{d},x{d}, {d}\n", .{ inst.rd, inst.rs1, inst.imm });
-                // if (ast.debug_mode) try std.debug.print("    addi x{d},x{d}, {d}\n", .{ inst.rd, inst.rs1, inst.imm });
             },
 
             .ret => {
                 try writer.print("    ret\n", .{});
-                // if (ast.debug_mode) try std.debug.print("    ret\n", .{});
             },
 
             else => {
@@ -603,10 +574,6 @@ fn emit_assembly(alloc: std.mem.Allocator, riscv: std.ArrayList(RiscVInst), outp
                     "    # UNEMITTED OP: {s}\n",
                     .{@tagName(inst.op)},
                 );
-                // if (ast.debug_mode) try std.debug.print(
-                //     "    # UNEMITTED OP: {s}\n",
-                //     .{@tagName(inst.op)},
-                // );
             },
         }
     }

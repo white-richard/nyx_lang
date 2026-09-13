@@ -37,10 +37,12 @@ zig build
 
 The build invokes Flex and Bison to generate the parser and lexer C sources in the Zig build cache, then links them with the Zig compiler driver.
 
-On some rolling-release distributions, Zig 0.15.1 fails to link against the system C runtime (`unhandled relocation type R_X86_64_PC64 ... crt1.o:.sframe`). Building against Zig's bundled glibc avoids this:
+On some rolling-release distributions, Zig 0.15.1 fails to link against the system C runtime (`unhandled relocation type R_X86_64_PC64 ... crt1.o:.sframe`). Building against Zig's bundled glibc avoids this. Pass the option to every `zig build` command, before any `--`:
 
 ```sh
 zig build -Dtarget=x86_64-linux-gnu
+zig build run -Dtarget=x86_64-linux-gnu -- tests/fixtures/factorial.nyx
+zig build test -Dtarget=x86_64-linux-gnu
 ```
 
 ## Usage
@@ -70,7 +72,7 @@ NYAC output is written to `a.nyac`. When assembly lowering is enabled, the curre
 ## Testing
 
 ```sh
-zig build test    # unit tests (symbol tables)
+zig build test    # unit tests
 zig build smoke   # end-to-end: run the compiler on tests/fixtures and check its output
 ```
 

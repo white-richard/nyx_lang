@@ -1,43 +1,91 @@
-# 🌑 NyxLang
+# NyxLang
 
-> *"Born of shadow, parsed by light."*
-NyxLang is a **modern C-inspired language** powered by **Flex**, **Bison**, and **Zig**.  
-It’s named after **Nyx**, the Greek Titaness of Night — because every language deserves a little darkness, mystery, and just the right amount of ✨chaotic feline energy✨.
+NyxLang is a compiler built with Zig, Flex, and Bison. It accepts a subset of C syntax, builds and semantically checks an abstract syntax tree, lowers the program to a custom three-address intermediate representation, and emits RISC-V assembly.
 
-![NYX](./CatGirl&CatBoyPictures/Nyx.png)
-This project started as an academic exploration of compiler construction — but it’s quickly grown claws.  
-NyxLang aims to blend the **low-level precision of C** with **modern compilation in Zig**, creating a clean, experimental playground for language design.
+## Compiler Stages
 
----
+```text
+source file
+  -> Flex lexer
+  -> Bison parser
+  -> Zig AST
+  -> semantic analysis and symbol tables
+  -> NYAC three-address IR
+  -> liveness analysis
+  -> interference graph and register coloring
+  -> RISC-V lowering
+```
 
-## 🧩 Architecture
+The implementation is under `src`:
 
-NyxLang’s architecture splits cleanly into **three realms**:
+- `c11.l` and `c11.y` define the lexer and parser. The generated C sources are linked into the Zig executable.
+- `ast.zig` defines the AST representation and parser-facing node construction.
+- `scope.zig` and `semanticAnalyzer.zig` implement symbol tables, scopes, and semantic checks.
+- `3ac.zig` lowers supported AST nodes to NYAC, the project's three-address IR.
+- `assembler.zig` performs register allocation and lowers supported NYAC instructions to RISC-V assembly.
+- `main.zig` drives parsing, semantic analysis, IR generation, and assembly generation.
 
-| Realm | Description | Tech |
-|-------|--------------|------|
-| 🌘 **Lexer** | Tokenizes source code. | Flex (.l) |
-| 🌗 **Parser** | Converts tokens to an AST. | Bison (.y) |
-| 🌑 **Core / Backend** | Allocates nodes, builds trees, and interprets or compiles them. | Zig |
+## Building
 
-Bison and Flex generate C-compatible symbols (`yyparse`, `yylex`, and `root`), which are **linked directly into Zig** for further processing — like AST printing, semantic analysis, and (eventually) code generation.
+NyxLang was developed against Zig 0.15.1 and requires Flex and Bison.
 
----
+From the repository root:
 
-## 🌲 AST Printing
+```sh
+zig build
+```
 
-Once your parser runs, NyxLang’s Zig backend can pretty-print the abstract syntax tree:
+The build invokes Flex and Bison to generate the parser and lexer C sources in the Zig build cache, then links them with the Zig compiler driver.
 
-```zig
-pub fn printTree(node: ?*Node, depth: usize) void {
-    if (node == null) return;
-    const indent = "  " ** depth;
-    switch (node.*) {
-        .FunctionCall => |fc| {
-            std.debug.print("{s}FunctionCall: ", .{indent});
-            printTree(fc.name, depth + 1);
-            for (fc.args) |arg| printTree(arg, depth + 1);
-        },
-        else => std.debug.print("{s}{any}\n", .{indent, node.*}),
-    }
-}
+On some rolling-release distributions, Zig 0.15.1 fails to link against the system C runtime (`unhandled relocation type R_X86_64_PC64 ... crt1.o:.sframe`). Building against Zig's bundled glibc avoids this:
+
+```sh
+zig build -Dtarget=x86_64-linux-gnu
+```
+
+## Usage
+
+Run the compiler from the repository root and pass a source file:
+
+```sh
+zig build run -- tests/fixtures/factorial.nyx
+```
+
+An optional flag after the source file controls diagnostic output and the assembly backend:
+
+```sh
+zig build run -- tests/fixtures/array_initializer.nyx -a
+```
+
+| Flag  | Behavior                                                          |
+| ----- | ----------------------------------------------------------------- |
+| `-d`  | Enable verbose compiler output, including AST and IR diagnostics. |
+| `-a`  | Run the RISC-V lowering pass after NYAC generation.               |
+| `-ad` | Enable both debug output and RISC-V lowering.                     |
+
+Flags must be combined into a single argument (`-ad`, not `-a -d`).
+
+NYAC output is written to `a.nyac`. When assembly lowering is enabled, the current backend writes `ass.s`.
+
+## Testing
+
+```sh
+zig build test    # unit tests (symbol tables)
+zig build smoke   # end-to-end: run the compiler on tests/fixtures and check its output
+```
+
+Test programs live in `tests/fixtures`. The smoke tests check exit status, generated NYAC, diagnostics, and RISC-V output structurally rather than byte-for-byte, because the IR and backend still have known gaps.
+
+## Implementation notes
+
+NYAC uses virtual registers for intermediate values. The current register-allocation pass scans the IR backwards to compute liveness, builds an interference graph from simultaneously live values, and assigns physical RISC-V registers with greedy graph coloring. The resulting NYAC is rewritten with the selected physical registers before instruction lowering.
+
+The backend also assigns stack offsets for NYAC stack-slot instructions and lowers a subset of arithmetic, comparison, control-flow, and memory operations to RISC-V instructions.
+
+## Current limitations
+
+The parser accepts a broader C-style grammar than the compiler fully supports. Several constructs are explicitly rejected or only partially implemented, including `_Generic`, casts, enums, atomics, several storage-class and type qualifiers, and some function features.
+
+Semantic errors are reported as diagnostics but do not stop compilation, so the compiler can still exit with status 0 and write `a.nyac` after reporting them.
+
+Register spilling is not implemented. If graph coloring cannot assign a physical register, the allocator returns `RegisterSpillNeeded`. Function prologue/epilogue handling and calling-convention support are also incomplete, function calls (including `printf`) are not yet lowered as calls, and the backend crashes on floating-point constants (for example, `tests/fixtures/float_return.nyx` with `-a`).

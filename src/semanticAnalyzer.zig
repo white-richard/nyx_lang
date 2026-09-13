@@ -50,7 +50,7 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
 
                         // If there's no struct body, it's a variable declaration using an existing struct type
                         if (new_struct.struct_declaration_list == null) {
-                            
+
                             // Look up the existing struct type
                             if (st().get_type(name_slice)) |existing_type| {
                                 if (existing_type.base == .STRUCT) {
@@ -145,7 +145,7 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                                             for (sd.declarators) |decltor_node| {
                                                 var is_array = false;
                                                 var array_size: usize = 0;
-                                                
+
                                                 const field_name: []const u8 = switch (decltor_node.*) {
                                                     .Identifier => |id| id.name,
                                                     .Pointer => |ptr| blk3: {
@@ -191,11 +191,11 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                                                     }
                                                 }
 
-                                                const field_size = if (is_pointer) 
-                                                    @sizeOf(usize) 
-                                                else if (is_array) 
-                                                    field_type.size * array_size 
-                                                else 
+                                                const field_size = if (is_pointer)
+                                                    @sizeOf(usize)
+                                                else if (is_array)
+                                                    field_type.size * array_size
+                                                else
                                                     field_type.size;
                                                 const field_align = if (is_pointer) @alignOf(usize) else field_type.alignment;
 
@@ -853,13 +853,13 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
         .IdPointer => {
             if (ast.debug_mode) std.debug.print("IdPointer node semantically analyzed!\n", .{});
             const id = node.IdPointer;
-            
+
             // First analyze the base (struct instance)
             semantic_analyze_node(id.pointer) catch |err| {
                 if (ast.debug_mode) std.debug.print("Semantic Failure: {any}\n", .{err});
                 return;
             };
-            
+
             // Get the type of the base identifier (the struct instance)
             var struct_type: ?*ast.TypeNode = null;
             if (id.pointer.* == .Identifier) {
@@ -873,7 +873,7 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                     }
                 }
             }
-            
+
             // Validate that we have a struct type and the field exists
             if (struct_type) |st_type| {
                 const field_name = id.identifier.Identifier.name;
@@ -882,8 +882,7 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                         // Field exists, set the typeNode so 3AC can access field_map
                         id.typeNode = st_type;
                         if (ast.debug_mode) {
-                            std.debug.print("IdPointer member access: {s}.{s} (offset={?d})\n", 
-                                .{id.pointer.Identifier.name, field_name, field_info.offset});
+                            std.debug.print("IdPointer member access: {s}.{s} (offset={?d})\n", .{ id.pointer.Identifier.name, field_name, field_info.offset });
                         }
                     } else {
                         log.ErrorLoc(

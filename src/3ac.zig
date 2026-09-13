@@ -746,7 +746,6 @@ pub const Compiler = struct {
             return Unused;
         }
 
-
         self.cur_line = if (root.nameParam.NameParameterNode.name.Identifier.location) |loc| loc.line else 0;
         const func_ident_node = root.nameParam.NameParameterNode.name.Identifier;
 

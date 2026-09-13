@@ -510,7 +510,7 @@ fn emit_assembly(alloc: std.mem.Allocator, riscv: std.ArrayList(RiscVInst), outp
     var file_buf: [8192]u8 = undefined;
     var file_writer_wrapper = file.writer(&file_buf);
     const writer: *std.Io.Writer = &file_writer_wrapper.interface;
-    
+
     for (riscv.items) |inst| {
         switch (inst.op) {
             .label => {

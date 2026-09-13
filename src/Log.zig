@@ -2,17 +2,11 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const LogType = enum { INFO, WARN, ERROR };
 pub var err_count: usize = 0;
-pub fn InfoLoc
-(loc: *ast.Location, msg: []const u8, source: []const u8, hint: []const u8) 
-void 
-{
+pub fn InfoLoc(loc: *ast.Location, msg: []const u8, source: []const u8, hint: []const u8) void {
     log(loc.col, loc.line, msg, source, hint, .INFO);
 }
 
-pub fn C_Info
-(this_column: usize, this_line: usize, msg: [*c]const u8, source: []const u8, hint: [*c]const u8) 
-void 
-{
+pub fn C_Info(this_column: usize, this_line: usize, msg: [*c]const u8, source: []const u8, hint: [*c]const u8) void {
     const new_msg = std.mem.span(msg);
     const new_hint = std.mem.span(hint);
     log(this_column, this_line, new_msg, source, new_hint, .INFO);
@@ -35,20 +29,19 @@ pub fn Warn(this_column: usize, this_line: usize, msg: []const u8, source: []con
 }
 
 pub fn C_Error(this_column: usize, this_line: usize, msg: [*c]const u8, source: []const u8, hint: [*c]const u8) void {
-    err_count+=1;
+    err_count += 1;
     const new_msg = std.mem.span(msg);
     const new_hint = std.mem.span(hint);
     log(this_column, this_line, new_msg, source, new_hint, .ERROR);
 }
 pub fn Error(this_column: usize, this_line: usize, msg: []const u8, source: []const u8, hint: []const u8) void {
-    err_count+=1;
+    err_count += 1;
     log(this_column, this_line, msg, source, hint, .ERROR);
 }
 pub fn ErrorLoc(loc: *ast.Location, msg: []const u8, source: []const u8, hint: []const u8) void {
-    err_count+=1;
+    err_count += 1;
     log(loc.col, loc.line, msg, source, hint, .ERROR);
 }
-
 
 fn log(this_column: usize, this_line: usize, msg: []const u8, source: []const u8, hint: []const u8, l_type: LogType) void {
     // HEADER

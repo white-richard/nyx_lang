@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
     // for (test_targets) |tar| {
     //     const unit_tests = b.addTest(.{
     //         .root_module = b.createModule(.{
-    //             .root_source_file = b.path("src/symbolTable_test.zig"), 
+    //             .root_source_file = b.path("src/symbolTable_test.zig"),
     //             .target = b.resolveTargetQuery(tar),
     //             .optimize = optimize,
     //         }),

@@ -1,4 +1,3 @@
-tmp.md
 # Zig build artifacts
 zig-cache/
 .zig-cache/

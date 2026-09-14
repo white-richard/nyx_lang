@@ -7,12 +7,12 @@ const Output = struct {
     stderr: []const u8,
     /// Contents of a.nyac, or null if the compiler did not write it.
     nyac: ?[]const u8,
-    /// Contents of ass.s, or null if the compiler did not write it.
+    /// Contents of a.s, or null if the compiler did not write it.
     assembly: ?[]const u8,
 };
 
 /// Runs the compiler on `fixture` inside `dir`, which receives the
-/// generated a.nyac and ass.s files.
+/// generated a.nyac and a.s files.
 fn compile(alloc: std.mem.Allocator, dir: std.fs.Dir, fixture: []const u8, flags: ?[]const u8) !Output {
     // Build-option paths may be relative to the build root, but the compiler
     // runs inside `dir`, so resolve them first.
@@ -36,7 +36,7 @@ fn compile(alloc: std.mem.Allocator, dir: std.fs.Dir, fixture: []const u8, flags
         .term = result.term,
         .stderr = result.stderr,
         .nyac = try readOptional(alloc, dir, "a.nyac"),
-        .assembly = try readOptional(alloc, dir, "ass.s"),
+        .assembly = try readOptional(alloc, dir, "a.s"),
     };
 }
 

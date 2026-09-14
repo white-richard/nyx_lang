@@ -67,7 +67,7 @@ zig build run -- tests/fixtures/array_initializer.nyx -a
 
 Flags must be combined into a single argument (`-ad`, not `-a -d`).
 
-NYAC output is written to `a.nyac`. When assembly lowering is enabled, the current backend writes `ass.s`.
+NYAC output is written to `a.nyac`. When assembly lowering is enabled, the current backend writes `a.s`.
 
 ## Examples
 
@@ -79,8 +79,8 @@ Build the compiler once, then compile, link, and run any example:
 
 ```sh
 zig build
-./zig-out/bin/NyxLang examples/hello_world.nyx -a # writes a.nyac and ass.s
-zig cc -target riscv64-linux-musl -static ass.s -o zig-out/hello_world
+./zig-out/bin/NyxLang examples/hello_world.nyx -a # writes a.nyac and a.s
+zig cc -target riscv64-linux-musl -static a.s -o zig-out/hello_world
 qemu-riscv64 zig-out/hello_world
 ```
 
@@ -95,7 +95,7 @@ for f in examples/*.nyx; do
     [ "$f" = examples/semantic_errors.nyx ] && continue
     echo "== $f"
     ./zig-out/bin/NyxLang "$f" -a > /dev/null &&
-    zig cc -target riscv64-linux-musl -static ass.s -o zig-out/example &&
+    zig cc -target riscv64-linux-musl -static a.s -o zig-out/example &&
     qemu-riscv64 zig-out/example
 done
 ```

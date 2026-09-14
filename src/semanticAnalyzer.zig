@@ -243,8 +243,8 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                 }
             }
 
-            if (decl.assign_node) |ass| {
-                switch (ass.*) {
+            if (decl.assign_node) |an| {
+                switch (an.*) {
                     .Assignment => |assign| {
                         const declarator = assign.declarator;
                         switch (declarator.*) {
@@ -434,7 +434,7 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                         if (ast.debug_mode) {
                             std.debug.print(
                                 "Declaration: unknown assign_node tag: {s}\n",
-                                .{@tagName(ass.*)},
+                                .{@tagName(an.*)},
                             );
                         }
 
@@ -589,7 +589,7 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                     else => {},
                 }
             }
-            if (assgn.ass_op) |op| {
+            if (assgn.assign_op) |op| {
                 semantic_analyze_node(op) catch |err| {
                     if (ast.debug_mode) std.debug.print("Semantic Failure: {any}\n", .{err});
                     return;
@@ -741,8 +741,8 @@ pub fn semantic_analyze_node(node_opt: ?*ast.Node) !void {
                 return;
             };
         },
-        .AssOp => {
-            if (ast.debug_mode) std.debug.print("AssOp node semantically analyzed!\n", .{});
+        .AssignOp => {
+            if (ast.debug_mode) std.debug.print("AssignOp node semantically analyzed!\n", .{});
         },
         .Comp => {
             if (ast.debug_mode) std.debug.print("Comp node semantically analyzed!\n", .{});

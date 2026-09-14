@@ -177,7 +177,7 @@ pub const Compiler = struct {
             .ConditionalExpression => |node| try self.handle_cond_expr(node),
             // NOT USED? .Comp => |node| try self.handle_comp(node),
             // .Cast => |node| try self.handle_some_node(node),
-            // .AssOp => |node| try self.handle_some_node(node),
+            // .AssignOp => |node| try self.handle_some_node(node),
             .Declaration => |node| try self.handle_decl(node),
             .Assignment => |node| try self.handle_assignment(node),
             .WhileStmt => |node| try self.handle_while(node),
@@ -704,8 +704,8 @@ pub const Compiler = struct {
 
             // x += y and friends: load x, do the math, then store like a normal assignment
             var value_reg = rhs_reg;
-            if (root.ass_op) |ass_op| {
-                const op_str = ass_op.AssOp.assign_op;
+            if (root.assign_op) |assign_op| {
+                const op_str = assign_op.AssignOp.assign_op;
                 if (!std.mem.eql(u8, op_str, "=")) {
                     const instr: Instruction = if (std.mem.eql(u8, op_str, "+="))
                         .Add

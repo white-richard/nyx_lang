@@ -5,6 +5,5 @@ int main() {
         printf("%d...\n", n);
         n--;
     }
-    printf("Liftoff!\n");
     return 0;
 }

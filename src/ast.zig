@@ -190,7 +190,7 @@ pub const StructsFieldInfo = struct {
 pub const AssignmentNode = struct {
     declarator: *Node, // i.e. x in int x;
     initializer: ?*Node = null, // i.e. 5 in int x = 5;
-    ass_op: ?*Node = null, // i.e. *=
+    assign_op: ?*Node = null, // i.e. *=
     typeNode: ?*TypeNode = null,
     location: ?*Location = null,
 };
@@ -284,7 +284,7 @@ pub const NodeTag = enum {
     ConditionalExpression,
     Comp,
     Cast,
-    AssOp,
+    AssignOp,
 
     // Variables, Pointers and Arrays
     Declaration,
@@ -345,7 +345,7 @@ pub const Node = union(NodeTag) {
     ConditionalExpression: *ConditionalExpressionNode,
     Comp: *CompNode,
     Cast: *CastNode,
-    AssOp: *AssignmentOpNode,
+    AssignOp: *AssignmentOpNode,
 
     // Vars
     Declaration: *DeclarationNode,
@@ -608,9 +608,9 @@ export fn make_constant_node(value: [*c]const u8, typeval: c.yytokentype) ?*Node
     return n;
 }
 
-export fn make_assignment_node(declarator: *Node, initializer: ?*Node, ass_op: ?*Node) ?*Node {
+export fn make_assignment_node(declarator: *Node, initializer: ?*Node, assign_op: ?*Node) ?*Node {
     const assignment_node = glob_alloc.create(AssignmentNode) catch return null;
-    assignment_node.* = .{ .declarator = declarator, .initializer = initializer, .ass_op = ass_op, .location = get_location() };
+    assignment_node.* = .{ .declarator = declarator, .initializer = initializer, .assign_op = assign_op, .location = get_location() };
 
     const node = glob_alloc.create(Node) catch return null;
     node.* = Node{ .Assignment = assignment_node };
@@ -659,49 +659,49 @@ export fn make_unary_node(un_op: u8, val: *Node) ?*Node {
 }
 
 export fn make_assignment_op_node(token: c.yytokentype) ?*Node {
-    const ass_op_node = glob_alloc.create(AssignmentOpNode) catch return null;
+    const assign_op_node = glob_alloc.create(AssignmentOpNode) catch return null;
     if (@TypeOf(token) != c.yytokentype) return null;
     switch (token) {
         '=' => {
-            ass_op_node.* = AssignmentOpNode{ .assign_op = "=", .location = get_location() };
+            assign_op_node.* = AssignmentOpNode{ .assign_op = "=", .location = get_location() };
         },
         c.MUL_ASSIGN => {
-            ass_op_node.* = AssignmentOpNode{ .assign_op = "*=", .location = get_location() };
+            assign_op_node.* = AssignmentOpNode{ .assign_op = "*=", .location = get_location() };
         },
         c.DIV_ASSIGN => {
-            ass_op_node.* = AssignmentOpNode{ .assign_op = "/=", .location = get_location() };
+            assign_op_node.* = AssignmentOpNode{ .assign_op = "/=", .location = get_location() };
         },
         c.MOD_ASSIGN => {
-            ass_op_node.* = AssignmentOpNode{ .assign_op = "%=", .location = get_location() };
+            assign_op_node.* = AssignmentOpNode{ .assign_op = "%=", .location = get_location() };
         },
         c.ADD_ASSIGN => {
-            ass_op_node.* = AssignmentOpNode{ .assign_op = "+=", .location = get_location() };
+            assign_op_node.* = AssignmentOpNode{ .assign_op = "+=", .location = get_location() };
         },
         c.SUB_ASSIGN => {
-            ass_op_node.* = AssignmentOpNode{ .assign_op = "-=", .location = get_location() };
+            assign_op_node.* = AssignmentOpNode{ .assign_op = "-=", .location = get_location() };
         },
         c.LEFT_ASSIGN => {
-            ass_op_node.* = AssignmentOpNode{ .assign_op = "<<=", .location = get_location() };
+            assign_op_node.* = AssignmentOpNode{ .assign_op = "<<=", .location = get_location() };
         },
         c.RIGHT_ASSIGN => {
-            ass_op_node.* = AssignmentOpNode{ .assign_op = ">>=", .location = get_location() };
+            assign_op_node.* = AssignmentOpNode{ .assign_op = ">>=", .location = get_location() };
         },
         c.AND_ASSIGN => {
-            ass_op_node.* = AssignmentOpNode{ .assign_op = "&=", .location = get_location() };
+            assign_op_node.* = AssignmentOpNode{ .assign_op = "&=", .location = get_location() };
         },
         c.XOR_ASSIGN => {
-            ass_op_node.* = AssignmentOpNode{ .assign_op = "^=", .location = get_location() };
+            assign_op_node.* = AssignmentOpNode{ .assign_op = "^=", .location = get_location() };
         },
         c.OR_ASSIGN => {
-            ass_op_node.* = AssignmentOpNode{ .assign_op = "|=", .location = get_location() };
+            assign_op_node.* = AssignmentOpNode{ .assign_op = "|=", .location = get_location() };
         },
         else => {
-            ass_op_node.* = AssignmentOpNode{ .assign_op = "Error_Unknown_Op", .location = get_location() };
+            assign_op_node.* = AssignmentOpNode{ .assign_op = "Error_Unknown_Op", .location = get_location() };
         },
     }
 
     const node = glob_alloc.create(Node) catch return null;
-    node.* = Node{ .AssOp = ass_op_node };
+    node.* = Node{ .AssignOp = assign_op_node };
     const n: *Node = @ptrCast(node);
     return n;
 }
@@ -1365,9 +1365,9 @@ pub fn printNode(orig_node: ?*Node, indent: usize) !void {
                 std.debug.print("↳ Initializer:\n", .{});
                 try printNode(init, indent + 1);
             }
-            if (asgn.ass_op) |ass| {
+            if (asgn.assign_op) |op| {
                 std.debug.print("↳ Assignment Op:\n", .{});
-                try printNode(ass, indent + 1);
+                try printNode(op, indent + 1);
             } else {
                 printIndent(indent + 1);
                 std.debug.print("(no initializer)\n", .{});
@@ -1438,8 +1438,8 @@ pub fn printNode(orig_node: ?*Node, indent: usize) !void {
             std.debug.print("Prefix Op: {s}\n", .{pf.pre_op});
             try printNode(pf.val, indent + 1);
         },
-        .AssOp => {
-            const ao = node.AssOp;
+        .AssignOp => {
+            const ao = node.AssignOp;
             printIndent(indent + 1);
             std.debug.print("Assignment Op: {s}\n", .{ao.assign_op});
         },

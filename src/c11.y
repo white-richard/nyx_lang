@@ -18,10 +18,10 @@ void zig_error(const char *hint, const char *msg);
 // So we can return generic node pointers and other values
 struct Node* node;
 struct Node* make_identifier_node(const char *s);
-struct Node* make_declaration_node(struct Node* type_spec_node, struct Node* ass_node);
+struct Node* make_declaration_node(struct Node* type_spec_node, struct Node* assign_node);
 struct Node* make_constant_node(int s, enum yytokentype typeval);
 struct Node* make_type_node(enum yytokentype token);
-struct Node* make_assignment_node(struct Node* declarator, struct Node* initializer, struct Node* ass_op);
+struct Node* make_assignment_node(struct Node* declarator, struct Node* initializer, struct Node* assign_op);
 struct Node* make_conditional_expression_node(struct Node* expr1, enum yytokentype token, struct Node* expr2);
 struct Node* make_binary_node(struct Node* left, char operator, struct Node* right);
 struct Node* make_expr_stmt(struct Node* expr);

@@ -3,11 +3,11 @@ const ir = @import("3ac.zig");
 const ast = @import("ast.zig");
 
 // Inspecting the generated assembly:
-//   zig cc -target riscv64-freestanding -c ass.s -o ass.o
-//   llvm-objdump -d ass.o
+//   zig cc -target riscv64-freestanding -c a.s -o a.o
+//   llvm-objdump -d a.o
 //
 // Running it under user-mode emulation (requires qemu-riscv64):
-//   zig cc -target riscv64-linux-musl -static -O0 ass.s -o a.out
+//   zig cc -target riscv64-linux-musl -static -O0 a.s -o a.out
 //   qemu-riscv64 ./a.out; echo $?
 
 // Calling convention:
@@ -29,7 +29,7 @@ pub fn assemble(
     defer riscv.deinit(alloc);
 
     // 3. Emit assembly to file
-    try emit_assembly(alloc, riscv, "ass.s");
+    try emit_assembly(alloc, riscv, "a.s");
 }
 
 // Physical registers available to the allocator.

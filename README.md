@@ -111,26 +111,15 @@ zig build smoke   # end-to-end: run the compiler on tests/fixtures and check its
 
 Test programs live in `tests/fixtures`. The smoke tests check exit status, generated NYAC, diagnostics, and RISC-V output structurally rather than byte-for-byte, because the IR and backend still have known gaps.
 
-## Implementation notes
-
-NYAC uses virtual registers for intermediate values. The current register-allocation pass scans the IR backwards to compute liveness, builds an interference graph from simultaneously live values, and assigns physical RISC-V registers with greedy graph coloring. The resulting NYAC is rewritten with the selected physical registers before instruction lowering.
-
-The backend gives every variable an 8-byte stack slot (globals go in `.data`), and every struct field its own 8 bytes, in declaration order, and lowers arithmetic, comparison, logical, control-flow, memory, and call instructions to RV64 assembly. The calling convention is deliberately simple: arguments go in `a0`-`a7`, return values come back in `a0`, the allocator only uses `s0`-`s11`, and every function saves all of them plus `ra` in its prologue. The output links against musl's `printf`.
-
 ## Current limitations
 
 The parser accepts a broader C-style grammar than the compiler fully supports. Several constructs are explicitly rejected or only partially implemented, including `_Generic`, casts, enums, atomics, several storage-class and type qualifiers, and some function features.
 
-Semantic errors are reported as diagnostics but do not stop compilation, so the compiler can still exit with status 0 and write `a.nyac` after reporting them.
+Not supported yet:
 
-Code generation covers the features in `examples/`. Not supported yet:
-
-- array indexing (`a[i]`); array initializers produce IR only
-- struct pointers (`p->x`), struct parameters and return values, and nested structs; struct initializers are positional, so a designator like `.y =` is ignored and the value goes to the next field in order
-- floating-point values; the backend stops with `UnsupportedConstant` (for example, `tests/fixtures/float_return.nyx` with `-a`)
-- the ternary operator, `do`/`while`, `switch`, `break`, `continue`, and `goto`, which parse but generate no code
-- short-circuit evaluation: both sides of `&&` and `||` are always evaluated
-- more than 8 function arguments
-- register spilling: if graph coloring runs out of registers, the allocator returns `RegisterSpillNeeded`
-
-The semantic analyzer has known bugs: after a `const int` declaration, other `int` variables are also treated as const, and an undeclared variable inside a larger expression crashes the analyzer.
+- array indexing
+- struct pointers
+- floating-point values
+- the ternary operator, `do`/`while`, `switch`, `break`, `continue`, and `goto`, parse but generate no code
+- short-circuit evaluation
+- register spilling

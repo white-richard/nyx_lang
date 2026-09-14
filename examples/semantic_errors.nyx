@@ -1,0 +1,12 @@
+// Compile-time checks. Note this program is intentionally wrong.
+// Compiling it prints the errors the semantic analyzer finds.
+int add(int a, int b) {
+    return a + b;
+}
+
+int main() {
+    int values[2] = {1, 2, 3};
+    add(1);
+    add(1, 2, 3);
+    return 0;
+}

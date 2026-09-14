@@ -1,0 +1,15 @@
+// Global variables shared between functions.
+int counter = 100;
+
+int bump(int amount) {
+    counter += amount;
+    return counter;
+}
+
+int main() {
+    printf("counter starts at %d\n", counter);
+    bump(5);
+    bump(20);
+    printf("after two bumps: %d\n", counter);
+    return 0;
+}

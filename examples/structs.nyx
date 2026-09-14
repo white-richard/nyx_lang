@@ -1,0 +1,32 @@
+// Structs: initializer lists, reading fields, and assigning to fields.
+struct Point {
+    int x;
+    int y;
+};
+
+struct Student {
+    char grade;
+    int id;
+    int score;
+};
+
+struct Point origin = {1, 2};
+
+int main() {
+    struct Point corner = {5, 3};
+    printf("origin = (%d, %d), corner = (%d, %d)\n", origin.x, origin.y, corner.x, corner.y);
+
+    int width = corner.x - origin.x;
+    int height = corner.y - origin.y;
+    printf("area = %d\n", width * height);
+
+    struct Student s = {'B', 7, 85};
+    printf("student %d: score %d, grade %c\n", s.id, s.score, s.grade);
+
+    s.score = s.score + 10;
+    if (s.score > 90) {
+        s.grade = 'A';
+    }
+    printf("student %d: score %d, grade %c\n", s.id, s.score, s.grade);
+    return 0;
+}

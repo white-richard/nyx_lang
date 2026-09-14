@@ -1,0 +1,12 @@
+// Relational and equality operators produce 1 (true) or 0 (false).
+int main() {
+    int a = 3;
+    int b = 7;
+    printf("a < b  -> %d\n", a < b);
+    printf("a > b  -> %d\n", a > b);
+    printf("a <= 3 -> %d\n", a <= 3);
+    printf("b >= 8 -> %d\n", b >= 8);
+    printf("a == 3 -> %d\n", a == 3);
+    printf("a != b -> %d\n", a != b);
+    return 0;
+}

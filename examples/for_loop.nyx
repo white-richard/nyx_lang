@@ -1,0 +1,13 @@
+// for loops: a running sum and a times table.
+int main() {
+    int sum = 0;
+    for (int i = 1; i <= 10; i++) {
+        sum += i;
+    }
+    printf("1 + 2 + ... + 10 = %d\n", sum);
+
+    for (int j = 1; j <= 5; j++) {
+        printf("7 x %d = %d\n", j, 7 * j);
+    }
+    return 0;
+}

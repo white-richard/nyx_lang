@@ -1,0 +1,5 @@
+// Prints a line of text with printf.
+int main() {
+    printf("Hello from NyxLang!\n");
+    return 0;
+}

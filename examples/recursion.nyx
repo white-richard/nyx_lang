@@ -1,0 +1,21 @@
+// Recursive functions.
+int factorial(int n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+int fib(int n) {
+    if (n < 2) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+int main() {
+    for (int i = 0; i <= 10; i++) {
+        printf("factorial(%d) = %d, fib(%d) = %d\n", i, factorial(i), i, fib(i));
+    }
+    return 0;
+}

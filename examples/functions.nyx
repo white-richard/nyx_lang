@@ -1,0 +1,23 @@
+// Functions with parameters and return values, including nested calls.
+int add(int a, int b) {
+    return a + b;
+}
+
+int square(int n) {
+    return n * n;
+}
+
+int max(int a, int b) {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+int main() {
+    printf("add(2, 3) = %d\n", add(2, 3));
+    printf("square(9) = %d\n", square(9));
+    printf("max(4, 11) = %d\n", max(4, 11));
+    printf("square(add(1, 2)) = %d\n", square(add(1, 2)));
+    return 0;
+}

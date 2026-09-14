@@ -1,0 +1,10 @@
+// Logical AND and OR.
+int main() {
+    int yes = 5;
+    int no = 0;
+    printf("yes && yes -> %d\n", yes && yes);
+    printf("yes && no  -> %d\n", yes && no);
+    printf("no || yes  -> %d\n", no || yes);
+    printf("no || no   -> %d\n", no || no);
+    return 0;
+}

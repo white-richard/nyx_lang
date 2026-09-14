@@ -1,0 +1,9 @@
+// Unary minus, bitwise NOT, and logical NOT.
+int main() {
+    int x = 6;
+    printf("-x = %d\n", -x);
+    printf("~x = %d\n", ~x);
+    printf("!x = %d\n", !x);
+    printf("!0 = %d\n", !0);
+    return 0;
+}

@@ -1,0 +1,13 @@
+// Prefix and postfix ++ and --.
+int main() {
+    int i = 5;
+    printf("i++ returns %d, ", i++);
+    printf("then i = %d\n", i);
+    printf("++i returns %d, ", ++i);
+    printf("then i = %d\n", i);
+    printf("i-- returns %d, ", i--);
+    printf("then i = %d\n", i);
+    printf("--i returns %d, ", --i);
+    printf("then i = %d\n", i);
+    return 0;
+}

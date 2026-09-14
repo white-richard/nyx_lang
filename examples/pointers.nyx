@@ -1,0 +1,18 @@
+// Address-of, dereference, and writing through a pointer.
+int set_to(int *target, int value) {
+    *target = value;
+    return 0;
+}
+
+int main() {
+    int x = 10;
+    int *p = &x;
+    printf("x = %d, *p = %d\n", x, *p);
+
+    *p = 25;
+    printf("after *p = 25, x = %d\n", x);
+
+    set_to(&x, 99);
+    printf("after set_to(&x, 99), x = %d\n", x);
+    return 0;
+}

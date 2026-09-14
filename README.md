@@ -69,6 +69,39 @@ Flags must be combined into a single argument (`-ad`, not `-a -d`).
 
 NYAC output is written to `a.nyac`. When assembly lowering is enabled, the current backend writes `ass.s`.
 
+## Examples
+
+`examples/` has one small program per supported language feature. Each one prints its results, so you can compile it to RISC-V, run it, and see the output.
+
+Running the programs needs `qemu-riscv64` (user-mode QEMU: `qemu-user` on Arch, Debian, and Ubuntu). Zig's bundled `zig cc` assembles and links the output against musl, so no RISC-V toolchain is required.
+
+Build the compiler once, then compile, link, and run any example:
+
+```sh
+zig build
+./zig-out/bin/NyxLang examples/hello_world.nyx -a # writes a.nyac and ass.s
+zig cc -target riscv64-linux-musl -static ass.s -o zig-out/hello_world
+qemu-riscv64 zig-out/hello_world
+```
+
+```text
+Hello from NyxLang!
+```
+
+To run every example:
+
+```sh
+for f in examples/*.nyx; do
+    [ "$f" = examples/semantic_errors.nyx ] && continue
+    echo "== $f"
+    ./zig-out/bin/NyxLang "$f" -a > /dev/null &&
+    zig cc -target riscv64-linux-musl -static ass.s -o zig-out/example &&
+    qemu-riscv64 zig-out/example
+done
+```
+
+On systems that need the `-Dtarget=x86_64-linux-gnu` workaround above, pass it to `zig build`.
+
 ## Testing
 
 ```sh
@@ -82,7 +115,7 @@ Test programs live in `tests/fixtures`. The smoke tests check exit status, gener
 
 NYAC uses virtual registers for intermediate values. The current register-allocation pass scans the IR backwards to compute liveness, builds an interference graph from simultaneously live values, and assigns physical RISC-V registers with greedy graph coloring. The resulting NYAC is rewritten with the selected physical registers before instruction lowering.
 
-The backend also assigns stack offsets for NYAC stack-slot instructions and lowers a subset of arithmetic, comparison, control-flow, and memory operations to RISC-V instructions.
+The backend gives every variable an 8-byte stack slot (globals go in `.data`), and every struct field its own 8 bytes, in declaration order, and lowers arithmetic, comparison, logical, control-flow, memory, and call instructions to RV64 assembly. The calling convention is deliberately simple: arguments go in `a0`-`a7`, return values come back in `a0`, the allocator only uses `s0`-`s11`, and every function saves all of them plus `ra` in its prologue. The output links against musl's `printf`.
 
 ## Current limitations
 
@@ -90,4 +123,14 @@ The parser accepts a broader C-style grammar than the compiler fully supports. S
 
 Semantic errors are reported as diagnostics but do not stop compilation, so the compiler can still exit with status 0 and write `a.nyac` after reporting them.
 
-Register spilling is not implemented. If graph coloring cannot assign a physical register, the allocator returns `RegisterSpillNeeded`. Function prologue/epilogue handling and calling-convention support are also incomplete, function calls (including `printf`) are not yet lowered as calls, and the backend crashes on floating-point constants (for example, `tests/fixtures/float_return.nyx` with `-a`).
+Code generation covers the features in `examples/`. Not supported yet:
+
+- array indexing (`a[i]`); array initializers produce IR only
+- struct pointers (`p->x`), struct parameters and return values, and nested structs; struct initializers are positional, so a designator like `.y =` is ignored and the value goes to the next field in order
+- floating-point values; the backend stops with `UnsupportedConstant` (for example, `tests/fixtures/float_return.nyx` with `-a`)
+- the ternary operator, `do`/`while`, `switch`, `break`, `continue`, and `goto`, which parse but generate no code
+- short-circuit evaluation: both sides of `&&` and `||` are always evaluated
+- more than 8 function arguments
+- register spilling: if graph coloring runs out of registers, the allocator returns `RegisterSpillNeeded`
+
+The semantic analyzer has known bugs: after a `const int` declaration, other `int` variables are also treated as const, and an undeclared variable inside a larger expression crashes the analyzer.

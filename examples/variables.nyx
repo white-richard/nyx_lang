@@ -1,0 +1,11 @@
+// Local variables: declaration, initialization, and reassignment.
+int main() {
+    int count = 3;
+    char letter = 'N';
+    printf("count = %d\n", count);
+    printf("letter = %c\n", letter);
+
+    count = 42;
+    printf("count is now %d\n", count);
+    return 0;
+}

@@ -10,13 +10,11 @@ const ast = @import("ast.zig");
 //   zig cc -target riscv64-linux-musl -static -O0 ass.s -o a.out
 //   qemu-riscv64 ./a.out; echo $?
 
-// TODO: Move return values into a0.
-// TODO: The allocator hands out callee-saved registers (s0-s11) without
-// saving them. Preserve callee-saved registers and emit the required
-// function prologue and epilogue.
-// TODO: Emit .globl directives for exported symbols.
-// TODO: Loads and stores are emitted as 32-bit lw/sw. Verify whether they
-// should use 64-bit width on riscv64.
+// Calling convention:
+//   - arguments go in a0-a7, the return value comes back in a0
+//   - the allocator only hands out s0-s11, and every function saves all of
+//     them plus ra in its prologue
+//   - every variable lives in an 8 byte stack slot (ld/sd), globals live in .data
 
 pub fn assemble(
     alloc: std.mem.Allocator,
@@ -35,13 +33,17 @@ pub fn assemble(
 }
 
 // Physical registers available to the allocator.
+// Only the callee-saved s registers, t0/t1 are left free as scratch and a0-a7 for calls.
 const PHYS_REGS = [_]u8{
-    // Avoid x0 (zero), x1 (ra), x2 (sp)
-    5, 6, 7, // t0–t2
-    28, 29, 30, 31, // t3–t6
-    10, 11, 12, 13, 14, 15, 16, 17, // a0–a7 (optional)
-    8, 9, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, // s0–s11 (optional)
+    8, 9, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, // s0–s11
 };
+const SAVED_REGS = PHYS_REGS;
+
+// After allocation they are renumbered to SLOT_BASE + id so the lowering pass can tell them apart
+const SLOT_BASE: usize = 1000;
+const T0: usize = 5;
+const T1: usize = 6;
+const A0: usize = 10;
 
 fn allocate_registers(
     alloc: std.mem.Allocator,
@@ -60,12 +62,22 @@ fn allocate_registers(
     const graph = try build_interference_graph(alloc, nyac, live_list, temp_count);
     defer free_graph(alloc, graph);
 
+    // Which virtual registers are really stack slots
+    var is_slot = try alloc.alloc(bool, temp_count);
+    defer alloc.free(is_slot);
+    @memset(is_slot, false);
+    for (nyac) |inst| {
+        if (inst.instruction == .ImbueRegister and inst.return_addr != ir.Unused) {
+            is_slot[inst.return_addr] = true;
+        }
+    }
+
     // 3. Graph coloring
-    const coloring = try color_graph(alloc, graph);
+    const coloring = try color_graph(alloc, graph, is_slot);
     defer alloc.free(coloring);
 
     // 4. Rewrite NYAC with physical registers
-    return try rewrite_registers(alloc, nyac, coloring);
+    return try rewrite_registers(alloc, nyac, coloring, is_slot);
 }
 
 fn analyze_lifetimes(
@@ -90,16 +102,19 @@ fn analyze_lifetimes(
         // Snapshot live-after for this instruction
         live_list[i] = try live_now.clone(alloc);
 
-        // Defs kill liveness
-        if (inst.return_addr != ir.Unused) {
+        // Defs kill liveness (SR is the exception, its return_addr is the address it writes to)
+        if (inst.return_addr != ir.Unused and inst.instruction != .StoreRegister) {
             live_now.unset(inst.return_addr);
         }
 
         // Uses add liveness
-        if (inst.op1 == .Register) {
+        if (inst.instruction == .StoreRegister and inst.return_addr != ir.Unused) {
+            live_now.set(inst.return_addr);
+        }
+        if (inst.op1 == .Register and inst.op1.Register != ir.Unused) {
             live_now.set(inst.op1.Register);
         }
-        if (inst.op2 == .Register) { // Fixed: was op2_addr
+        if (inst.op2 == .Register and inst.op2.Register != ir.Unused) { // Fixed: was op2_addr
             live_now.set(inst.op2.Register);
         }
     }
@@ -126,7 +141,7 @@ fn build_interference_graph(
 
     // For each instruction, the defined register interferes with all live registers
     for (nyac, 0..) |inst, i| {
-        if (inst.return_addr == ir.Unused) continue;
+        if (inst.return_addr == ir.Unused or inst.instruction == .StoreRegister) continue;
 
         const def = inst.return_addr;
         var iter = live_list[i].iterator(.{});
@@ -154,6 +169,7 @@ fn add_edge(adj_list: *std.ArrayList(usize), neighbor: usize, alloc: std.mem.All
 fn color_graph(
     alloc: std.mem.Allocator,
     graph: []const std.ArrayList(usize),
+    is_slot: []const bool,
 ) ![]usize {
     const num_colors = PHYS_REGS.len;
     var coloring = try alloc.alloc(usize, graph.len);
@@ -161,6 +177,9 @@ fn color_graph(
 
     // Simple greedy coloring
     for (graph, 0..) |neighbors, node| {
+        // stack slots live in memory
+        if (is_slot[node]) continue;
+
         var used_colors = try std.bit_set.DynamicBitSet.initEmpty(alloc, num_colors);
         defer used_colors.deinit();
 
@@ -198,37 +217,30 @@ fn rewrite_registers(
     alloc: std.mem.Allocator,
     nyac: []const ir.NYAC,
     coloring: []const usize,
+    is_slot: []const bool,
 ) ![]ir.NYAC {
     var result = try alloc.alloc(ir.NYAC, nyac.len);
-    var is_slot = try alloc.alloc(bool, coloring.len);
-    defer alloc.free(is_slot);
-    @memset(is_slot, false);
-
-    for (nyac) |inst| {
-        if (inst.instruction == .ImbueRegister and inst.return_addr != ir.Unused) {
-            is_slot[inst.return_addr] = true;
-        }
-    }
 
     for (nyac, 0..) |inst, i| {
         result[i] = inst;
 
         // Map virtual register to physical register
-        if (inst.return_addr != ir.Unused and !is_slot[inst.return_addr]) {
-            const c = coloring[inst.return_addr];
-            result[i].return_addr = PHYS_REGS[c];
+        result[i].return_addr = map_register(inst.return_addr, coloring, is_slot);
+        if (inst.op1 == .Register) {
+            result[i].op1 = .{ .Register = map_register(inst.op1.Register, coloring, is_slot) };
         }
-        if (inst.op1 == .Register and !is_slot[inst.op1.Register]) {
-            const c = coloring[inst.op1.Register];
-            result[i].op1 = .{ .Register = PHYS_REGS[c] };
-        }
-        if (inst.op2 == .Register and !is_slot[inst.op2.Register]) {
-            const c = coloring[inst.op2.Register];
-            result[i].op2 = .{ .Register = PHYS_REGS[c] };
+        if (inst.op2 == .Register) {
+            result[i].op2 = .{ .Register = map_register(inst.op2.Register, coloring, is_slot) };
         }
     }
 
     return result;
+}
+
+fn map_register(reg: usize, coloring: []const usize, is_slot: []const bool) usize {
+    if (reg == ir.Unused) return ir.Unused;
+    if (is_slot[reg]) return SLOT_BASE + reg;
+    return PHYS_REGS[coloring[reg]];
 }
 
 fn find_max_temp(nyac: []const ir.NYAC) usize {
@@ -293,9 +305,19 @@ const Op = enum {
     // memory
     lw,
     sw,
+    ld,
+    sd,
+    la,
+
+    // calls
+    call,
 
     // pseudo
     label,
+    globl,
+    section,
+    string,
+    zero,
 };
 
 fn lower_to_riscv(
@@ -309,20 +331,33 @@ fn lower_to_riscv(
 
     var frame_size: i32 = 0;
 
+    // globals (slot id + size) and string literals
+    var globals: std.ArrayList([2]i32) = .empty;
+    var strings: std.ArrayList([]const u8) = .empty;
+
     // PASS 1: assign each IMBUE_REGISTER a stack slot
     for (nyac) |inst| {
         if (inst.instruction == .ImbueRegister) {
-            const slot_id = inst.return_addr;
-            const bytes: i32 = inst.op1.Value.Number;
+            const slot_id = inst.return_addr - SLOT_BASE;
+            // everything gets at least 8 bytes so ld/sd (and pointers) fit, rounded to 8
+            var bytes: i32 = if (inst.op1 == .Value) @max(inst.op1.Value.Number, 8) else 8;
+            bytes = (bytes + 7) & ~@as(i32, 7);
 
-            if (!slot_off.contains(slot_id)) {
+            if (inst.op2 == .Label) {
+                // global variable, lives in .data instead of the stack
+                try globals.append(alloc, .{ @intCast(slot_id), bytes });
+            } else if (!slot_off.contains(slot_id)) {
                 slot_off.put(slot_id, frame_size) catch return error.OutOfMemory;
                 frame_size += bytes;
             }
         }
     }
 
-    const fs = align16(frame_size);
+    // every function uses the same frame: all slots + space to save ra and the s registers
+    const save_area: i32 = (SAVED_REGS.len + 1) * 8;
+    const fs = align16(frame_size + save_area);
+
+    try out.append(alloc, .{ .op = .section, .label = ".text" });
 
     // PASS 2: lower each NYAC instruction
     for (nyac) |inst| {
@@ -331,18 +366,25 @@ fn lower_to_riscv(
             // Arethmetic Operations ////
             /////////////////////////////
             .Add => {
+                // adding to a slot means adding to its address (array/struct offsets)
+                var rs1: usize = if (inst.op1 == .Register) inst.op1.Register else 0;
+                if (rs1 >= SLOT_BASE) {
+                    try slot_address(alloc, &out, T0, rs1, slot_off);
+                    rs1 = T0;
+                }
+
                 if (inst.op1 == .Register and inst.op2 == .Register) {
                     try out.append(alloc, .{
                         .op = .add,
                         .rd = inst.return_addr,
-                        .rs1 = inst.op1.Register,
+                        .rs1 = rs1,
                         .rs2 = inst.op2.Register,
                     });
                 } else if (inst.op1 == .Register and inst.op2 == .Value) {
                     try out.append(alloc, .{
                         .op = .addi,
                         .rd = inst.return_addr,
-                        .rs1 = inst.op1.Register,
+                        .rs1 = rs1,
                         .imm = inst.op2.Value.Number,
                     });
                 } else if (inst.op1 == .Value and inst.op2 == .Register) {
@@ -366,11 +408,25 @@ fn lower_to_riscv(
                 });
             },
             .Constant => {
-                try out.append(alloc, .{
-                    .op = .li,
-                    .rd = inst.return_addr,
-                    .imm = inst.op1.Value.Number,
-                });
+                switch (inst.op1.Value) {
+                    .Number => {
+                        try out.append(alloc, .{
+                            .op = .li,
+                            .rd = inst.return_addr,
+                            .imm = inst.op1.Value.Number,
+                        });
+                    },
+                    .Char => |ch| {
+                        try out.append(alloc, .{ .op = .li, .rd = inst.return_addr, .imm = ch });
+                    },
+                    .String => |str| {
+                        // string literals go in .rodata, load their address
+                        try out.append(alloc, .{ .op = .la, .rd = inst.return_addr, .label = try std.fmt.allocPrint(alloc, ".Lstr{d}", .{strings.items.len}) });
+                        try strings.append(alloc, str);
+                    },
+                    // floats would need the floating point registers
+                    else => return error.UnsupportedConstant,
+                }
             },
             .Multiply => {
                 try out.append(alloc, .{ .op = .mul, .rd = inst.return_addr, .rs1 = inst.op1.Register, .rs2 = inst.op2.Register });
@@ -389,7 +445,7 @@ fn lower_to_riscv(
                 try out.append(alloc, .{ .op = .sltiu, .rd = inst.return_addr, .rs1 = inst.return_addr, .imm = 1 });
             },
             .NotEquals => {
-                try out.append(alloc, .{ .op = .xori, .rd = inst.return_addr, .rs1 = inst.op1.Register, .rs2 = inst.op2.Register });
+                try out.append(alloc, .{ .op = .bxor, .rd = inst.return_addr, .rs1 = inst.op1.Register, .rs2 = inst.op2.Register });
                 try out.append(alloc, .{ .op = .sltu, .rd = inst.return_addr, .rs1 = 0, .rs2 = inst.return_addr });
             },
             .LessThan => {
@@ -406,6 +462,16 @@ fn lower_to_riscv(
                 try out.append(alloc, .{ .op = .slt, .rd = inst.return_addr, .rs1 = inst.op1.Register, .rs2 = inst.op2.Register }); // a < b
                 try out.append(alloc, .{ .op = .xori, .rd = inst.return_addr, .rs1 = inst.return_addr, .imm = 1 }); // !(a < b)
             },
+            .And => {
+                // turn both sides into 0/1 first so 2 && 1 is 1
+                try out.append(alloc, .{ .op = .sltu, .rd = T0, .rs1 = 0, .rs2 = inst.op1.Register });
+                try out.append(alloc, .{ .op = .sltu, .rd = T1, .rs1 = 0, .rs2 = inst.op2.Register });
+                try out.append(alloc, .{ .op = .band, .rd = inst.return_addr, .rs1 = T0, .rs2 = T1 });
+            },
+            .Or => {
+                try out.append(alloc, .{ .op = .bor, .rd = inst.return_addr, .rs1 = inst.op1.Register, .rs2 = inst.op2.Register });
+                try out.append(alloc, .{ .op = .sltu, .rd = inst.return_addr, .rs1 = 0, .rs2 = inst.return_addr });
+            },
             //////////////////
             ///// JUMPS /////
             /////////////////
@@ -417,15 +483,36 @@ fn lower_to_riscv(
                     .op = .label,
                     .label = name,
                 });
+            },
 
-                // Function prologue for main (you can generalize later)
-                if (std.mem.eql(u8, name, "main") and fs != 0) {
-                    try out.append(alloc, .{
-                        .op = .addi,
-                        .rd = 2, // sp
-                        .rs1 = 2, // sp
-                        .imm = -fs,
-                    });
+            .ImbueFrame => {
+                // function prologue: make the frame and save ra + every s register
+                try out.append(alloc, .{ .op = .globl, .label = inst.op1.Label });
+                try out.append(alloc, .{ .op = .addi, .rd = 2, .rs1 = 2, .imm = -fs });
+                try out.append(alloc, .{ .op = .sd, .rs1 = 2, .rs2 = 1, .offset = fs - 8 });
+                for (SAVED_REGS, 0..) |reg, k| {
+                    try out.append(alloc, .{ .op = .sd, .rs1 = 2, .rs2 = reg, .offset = fs - 16 - @as(i32, @intCast(k)) * 8 });
+                }
+            },
+
+            ///////////////////
+            ///// Calls  //////
+            ///////////////////
+            .Arg => {
+                // mv aN, value
+                const n: usize = @intCast(inst.op2.Value.Number);
+                try out.append(alloc, .{ .op = .addi, .rd = A0 + n, .rs1 = inst.op1.Register, .imm = 0 });
+            },
+            .Param => {
+                // mv dst, aN
+                const n: usize = @intCast(inst.op1.Value.Number);
+                try out.append(alloc, .{ .op = .addi, .rd = inst.return_addr, .rs1 = A0 + n, .imm = 0 });
+            },
+            .Call => {
+                try out.append(alloc, .{ .op = .call, .label = inst.op1.Label });
+                // result comes back in a0
+                if (inst.return_addr != ir.Unused) {
+                    try out.append(alloc, .{ .op = .addi, .rd = inst.return_addr, .rs1 = A0, .imm = 0 });
                 }
             },
 
@@ -442,25 +529,24 @@ fn lower_to_riscv(
             ///// Arrays /////
             /////////////////
             .ImbueRegister => {
-                const slot_id = inst.return_addr;
-                const off = slot_off.get(slot_id) orelse return error.UnknownSlot;
-
-                // slot register holds an ADDRESS (pointer to its stack space)
-                try out.append(alloc, .{
-                    .op = .addi,
-                    .rd = slot_id,
-                    .rs1 = 2, // sp
-                    .imm = off,
-                });
+                // nothing to emit, the slot was given a stack offset (or .data space) in pass 1
+            },
+            .AddressOf => {
+                try slot_address(alloc, &out, inst.return_addr, inst.op1.Register, slot_off);
             },
 
             .LoadRegister => {
                 // LR dst, addr
                 const dst = inst.return_addr;
-                const addr = inst.op1.Register;
+                var addr = inst.op1.Register;
+                if (addr >= SLOT_BASE) {
+                    // a variable, get the address of its slot first
+                    try slot_address(alloc, &out, T0, addr, slot_off);
+                    addr = T0;
+                }
 
                 try out.append(alloc, .{
-                    .op = .lw,
+                    .op = .ld,
                     .rd = dst,
                     .rs1 = addr,
                     .offset = 0,
@@ -468,11 +554,15 @@ fn lower_to_riscv(
             },
             .StoreRegister => {
                 // SR addr, value
-                const addr = inst.return_addr;
+                var addr = inst.return_addr;
                 const value = inst.op1.Register;
+                if (addr >= SLOT_BASE) {
+                    try slot_address(alloc, &out, T0, addr, slot_off);
+                    addr = T0;
+                }
 
                 try out.append(alloc, .{
-                    .op = .sw,
+                    .op = .sd,
                     .rs1 = addr,
                     .rs2 = value,
                     .offset = 0,
@@ -480,6 +570,17 @@ fn lower_to_riscv(
             },
 
             .Return => {
+                // return value goes in a0
+                if (inst.op1 == .Register and inst.op1.Register != ir.Unused) {
+                    try out.append(alloc, .{ .op = .addi, .rd = A0, .rs1 = inst.op1.Register, .imm = 0 });
+                }
+
+                // restore ra and the s registers
+                try out.append(alloc, .{ .op = .ld, .rd = 1, .rs1 = 2, .offset = fs - 8 });
+                for (SAVED_REGS, 0..) |reg, k| {
+                    try out.append(alloc, .{ .op = .ld, .rd = reg, .rs1 = 2, .offset = fs - 16 - @as(i32, @intCast(k)) * 8 });
+                }
+
                 // restore stack pointer
                 if (fs != 0) {
                     try out.append(alloc, .{
@@ -499,7 +600,35 @@ fn lower_to_riscv(
         }
     }
 
+    // string literals
+    try out.append(alloc, .{ .op = .section, .label = ".rodata" });
+    for (strings.items, 0..) |str, n| {
+        try out.append(alloc, .{ .op = .label, .label = try std.fmt.allocPrint(alloc, ".Lstr{d}", .{n}) });
+        try out.append(alloc, .{ .op = .string, .label = str });
+    }
+
+    // global variables, their initial values get stored at the top of main
+    try out.append(alloc, .{ .op = .section, .label = ".data" });
+    for (globals.items) |g| {
+        try out.append(alloc, .{ .op = .label, .label = try global_name(alloc, @intCast(g[0])) });
+        try out.append(alloc, .{ .op = .zero, .imm = g[1] });
+    }
+
     return out;
+}
+
+fn global_name(alloc: std.mem.Allocator, slot_id: usize) ![]const u8 {
+    return try std.fmt.allocPrint(alloc, "nyx_global_{d}", .{slot_id});
+}
+
+// Puts the address of a stack slot (sp + offset) or a global (la) into rd
+fn slot_address(alloc: std.mem.Allocator, out: *std.ArrayList(RiscVInst), rd: usize, slot: usize, slot_off: std.AutoHashMap(usize, i32)) !void {
+    const slot_id = slot - SLOT_BASE;
+    if (slot_off.get(slot_id)) |off| {
+        try out.append(alloc, .{ .op = .addi, .rd = rd, .rs1 = 2, .imm = off });
+    } else {
+        try out.append(alloc, .{ .op = .la, .rd = rd, .label = try global_name(alloc, slot_id) });
+    }
 }
 
 fn emit_assembly(alloc: std.mem.Allocator, riscv: std.ArrayList(RiscVInst), output_path: []const u8) !void {
@@ -521,8 +650,21 @@ fn emit_assembly(alloc: std.mem.Allocator, riscv: std.ArrayList(RiscVInst), outp
                 try writer.print("    li x{d}, {d}\n", .{ inst.rd, inst.imm });
             },
 
+            // bitwise ops are named band/bor/bxor because and/or are Zig keywords
+            .band, .bor, .bxor => {
+                try writer.print(
+                    "    {s} x{d}, x{d}, x{d}\n",
+                    .{ @tagName(inst.op)[1..], inst.rd, inst.rs1, inst.rs2 },
+                );
+            },
+
+            // immediate ALU ops
+            .xori, .sltiu => {
+                try writer.print("    {s} x{d}, x{d}, {d}\n", .{ @tagName(inst.op), inst.rd, inst.rs1, inst.imm });
+            },
+
             // 3-register ALU ops
-            .add, .sub, .mul, .div, .rem, .band, .bor, .bxor, .slt, .sltu => {
+            .add, .sub, .mul, .div, .rem, .slt, .sltu => {
                 try writer.print(
                     "    {s} x{d}, x{d}, x{d}\n",
                     .{ @tagName(inst.op), inst.rd, inst.rs1, inst.rs2 },
@@ -561,19 +703,41 @@ fn emit_assembly(alloc: std.mem.Allocator, riscv: std.ArrayList(RiscVInst), outp
                 );
             },
 
+            // 64 bit loads and stores
+            .ld => {
+                try writer.print("    ld x{d}, {d}(x{d})\n", .{ inst.rd, inst.offset, inst.rs1 });
+            },
+            .sd => {
+                try writer.print("    sd x{d}, {d}(x{d})\n", .{ inst.rs2, inst.offset, inst.rs1 });
+            },
+            .la => {
+                try writer.print("    la x{d}, {s}\n", .{ inst.rd, inst.label });
+            },
+            .call => {
+                try writer.print("    call {s}\n", .{inst.label});
+            },
+
+            // assembler directives
+            .globl => {
+                try writer.print("    .globl {s}\n", .{inst.label});
+            },
+            .section => {
+                try writer.print("    .section {s}\n", .{inst.label});
+                if (std.mem.eql(u8, inst.label, ".data")) try writer.print("    .balign 8\n", .{});
+            },
+            .string => {
+                try writer.print("    .string \"{s}\"\n", .{inst.label});
+            },
+            .zero => {
+                try writer.print("    .zero {d}\n", .{inst.imm});
+            },
+
             .addi => {
                 try writer.print("    addi x{d},x{d}, {d}\n", .{ inst.rd, inst.rs1, inst.imm });
             },
 
             .ret => {
                 try writer.print("    ret\n", .{});
-            },
-
-            else => {
-                try writer.print(
-                    "    # UNEMITTED OP: {s}\n",
-                    .{@tagName(inst.op)},
-                );
             },
         }
     }

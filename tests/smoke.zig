@@ -165,6 +165,7 @@ test "RISC-V lowering emits assembly for a small program" {
     const out = try compile(arena.allocator(), tmp.dir, "array_initializer.nyx", "-a");
     try expectSuccess(out);
     try expectContains(out.assembly, "main:\n");
-    try expectContains(out.assembly, "    sw ");
+    try expectContains(out.assembly, "    .globl main\n");
+    try expectContains(out.assembly, "    sd ");
     try expectContains(out.assembly, "    ret\n");
 }

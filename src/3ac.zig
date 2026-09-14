@@ -42,6 +42,13 @@ pub const Instruction = enum {
     StoreRegister,
     LoadRegister,
     Return,
+    // Function calls: ARG moves a value into argument slot N before a CALL,
+    // PARAM reads incoming argument N at the top of a function.
+    Call,
+    Arg,
+    Param,
+    // Address of a variable's stack slot (for &x)
+    AddressOf,
 };
 pub const Value = union(enum) {
     Number: i32,
@@ -80,6 +87,8 @@ pub const Compiler = struct {
     file_text: std.ArrayList(u8),
     var_registers: std.StringHashMap(Register),
     var_locations: std.StringHashMap(usize),
+    // struct variables -> their struct type, so p.x can find x's offset
+    struct_types: std.StringHashMap(*ast.TypeNode),
     count: usize,
     label_counter: usize,
     fp_offset: usize,
@@ -95,6 +104,7 @@ pub const Compiler = struct {
             .file_text = .empty,
             .var_registers = std.StringHashMap(Register).init(alloc),
             .var_locations = std.StringHashMap(usize).init(alloc),
+            .struct_types = std.StringHashMap(*ast.TypeNode).init(alloc),
             .count = 8,
             .fp_offset = 0,
             .cur_line = 0,
@@ -108,6 +118,7 @@ pub const Compiler = struct {
         self.file_text.deinit(self.alloc);
         self.var_registers.deinit();
         self.var_locations.deinit();
+        self.struct_types.deinit();
         self.alloc.destroy(self);
     }
 
@@ -172,7 +183,7 @@ pub const Compiler = struct {
             .WhileStmt => |node| try self.handle_while(node),
             .IfStmt => |node| try self.handle_if(node),
             .ReturnStmt => |node| try self.handle_return(node),
-            // .String => |node| try self.handle_some_node(node),
+            .String => |node| try self.handle_string(node),
             // NOT USED? .Char => |node| try self.handle_some_node(node),
             // NOT USED? .Int => |node| try self.handle_some_node(node),
             // NOT USED? .Float => |node| try self.handle_some_node(node),
@@ -205,6 +216,24 @@ pub const Compiler = struct {
         // for unary '+', just return the operand register
         if (op == '+') {
             return try self.compile_expr(root.val);
+        }
+
+        // '&' needs the variable's slot, not its value, so handle it before compiling the operand
+        if (op == '&') {
+            if (root.val.* != .Identifier) return CompileError.UnsupportedNode;
+            const slot = self.var_registers.get(root.val.Identifier.name) orelse return CompileError.UndefinedVariable;
+
+            self.count += 1;
+            const addr = self.count;
+            const addr_nyac = NYAC{
+                .instruction = .AddressOf,
+                .return_addr = addr,
+                .op1 = NYACOperand{ .Register = slot },
+                .op2 = NYACOperand{ .Register = Unused },
+            };
+            try self.nyac_list.append(self.alloc, addr_nyac);
+            try self.emit(addr_nyac);
+            return addr;
         }
 
         // compile operand expression
@@ -276,14 +305,6 @@ pub const Compiler = struct {
             // dereference load from address in operand_reg
             nyac = NYAC{
                 .instruction = .LoadRegister,
-                .return_addr = dest,
-                .op1 = NYACOperand{ .Register = operand_reg },
-                .op2 = NYACOperand{ .Register = Unused },
-            };
-        } else if (op == '&') {
-            // address of using Imbue Register
-            nyac = NYAC{
-                .instruction = .ImbueRegister,
                 .return_addr = dest,
                 .op1 = NYACOperand{ .Register = operand_reg },
                 .op2 = NYACOperand{ .Register = Unused },
@@ -364,6 +385,8 @@ pub const Compiler = struct {
                 // if size > 0 then probably a struct
                 if (spec.Type.size > 0) {
                     struct_size = spec.Type.size;
+                    // the backend gives every field its own 8 byte spot
+                    if (spec.Type.field_map) |fields| struct_size = fields.count() * 8;
                     if (ast.debug_mode) {
                         std.debug.print("Handling type with size: {d} bytes\n", .{struct_size});
                     }
@@ -455,6 +478,12 @@ pub const Compiler = struct {
         try self.var_registers.put(name, dest);
         if (ast.debug_mode) std.debug.print("Identifier \"{s}\" assigned to register {d}\n", .{ name, dest });
 
+        // only plain struct variables; struct pointers (p->x) aren't supported
+        if (root.declaration_specifier) |spec| {
+            if (spec.* == .Type and spec.Type.field_map != null and root.assign_node.?.Assignment.declarator.* == .Identifier)
+                try self.struct_types.put(name, spec.Type);
+        }
+
         if (struct_size > 0) {
             try self.var_locations.put(name, struct_size);
             if (ast.debug_mode) {
@@ -529,6 +558,37 @@ pub const Compiler = struct {
 
     pub fn handle_id_pointer(self: *Compiler, node: *ast.IdPointerNode) anyerror!Register {
         self.cur_line = if (node.location) |loc| loc.line else 0;
+
+        // Reading a struct member like p.x: load from the field's address
+        if (node.pointer.* == .Identifier and node.identifier.* == .Identifier) {
+            if (self.struct_types.get(node.pointer.Identifier.name)) |tn| {
+                const base_reg = self.var_registers.get(node.pointer.Identifier.name) orelse return CompileError.UndefinedVariable;
+                const field_offset = try field_slot_offset(tn, node.identifier.Identifier.name);
+
+                self.count += 1;
+                const field_addr_reg = self.count;
+                const offset_nyac = NYAC{
+                    .instruction = .Add,
+                    .return_addr = field_addr_reg,
+                    .op1 = NYACOperand{ .Register = base_reg },
+                    .op2 = NYACOperand{ .Value = Value{ .Number = @intCast(field_offset) } },
+                };
+                try self.nyac_list.append(self.alloc, offset_nyac);
+                try self.emit(offset_nyac);
+
+                self.count += 1;
+                const value_reg = self.count;
+                const load_nyac = NYAC{
+                    .instruction = .LoadRegister,
+                    .return_addr = value_reg,
+                    .op1 = NYACOperand{ .Register = field_addr_reg },
+                    .op2 = NYACOperand{ .Register = Unused },
+                };
+                try self.nyac_list.append(self.alloc, load_nyac);
+                try self.emit(load_nyac);
+                return value_reg;
+            }
+        }
 
         // Compile the pointer
         const ptr_reg = try self.compile_expr(node.pointer);
@@ -639,14 +699,46 @@ pub const Compiler = struct {
                 .InitializerList => |init_list| {
                     return create_init_list(self, init_list, @intCast(lhs_reg));
                 },
-                else => return try self.compile_expr(izer),
+                else => try self.compile_expr(izer),
             };
+
+            // x += y and friends: load x, do the math, then store like a normal assignment
+            var value_reg = rhs_reg;
+            if (root.ass_op) |ass_op| {
+                const op_str = ass_op.AssOp.assign_op;
+                if (!std.mem.eql(u8, op_str, "=")) {
+                    const instr: Instruction = if (std.mem.eql(u8, op_str, "+="))
+                        .Add
+                    else if (std.mem.eql(u8, op_str, "-="))
+                        .Subtract
+                    else if (std.mem.eql(u8, op_str, "*="))
+                        .Multiply
+                    else if (std.mem.eql(u8, op_str, "/="))
+                        .Divide
+                    else if (std.mem.eql(u8, op_str, "%="))
+                        .Modulo
+                    else
+                        return CompileError.UnsupportedBinaryOp;
+
+                    self.count += 1;
+                    const old_reg = self.count;
+                    const load_nyac = NYAC{ .instruction = .LoadRegister, .return_addr = old_reg, .op1 = .{ .Register = lhs_reg }, .op2 = .{ .Register = Unused } };
+                    try self.nyac_list.append(self.alloc, load_nyac);
+                    try self.emit(load_nyac);
+
+                    self.count += 1;
+                    value_reg = self.count;
+                    const op_nyac = NYAC{ .instruction = instr, .return_addr = value_reg, .op1 = .{ .Register = old_reg }, .op2 = .{ .Register = rhs_reg } };
+                    try self.nyac_list.append(self.alloc, op_nyac);
+                    try self.emit(op_nyac);
+                }
+            }
 
             // TODO: Emit width-specific stores (byte, double word) based on the variable type.
             const nyac = NYAC{
                 .instruction = .StoreRegister,
                 .return_addr = lhs_reg,
-                .op1 = NYACOperand{ .Register = rhs_reg },
+                .op1 = NYACOperand{ .Register = value_reg },
                 .op2 = NYACOperand{ .Register = Unused },
             };
 
@@ -695,8 +787,8 @@ pub const Compiler = struct {
         }
 
         var field_offset: usize = 0;
-        if (id_pointer.typeNode) |tn| {
-            field_offset = tn.field_map.?.get(field_name).?.offset orelse return CompileError.Invalid;
+        if (id_pointer.typeNode orelse self.struct_types.get(struct_name)) |tn| {
+            field_offset = try field_slot_offset(tn, field_name);
         } else {
             return CompileError.Invalid;
         }
@@ -754,17 +846,38 @@ pub const Compiler = struct {
         try self.nyac_list.append(self.alloc, nyac);
         try self.emit(nyac);
 
+        // IMBUE_FRAME tells the assembler to set up the stack frame here
+        const frame_nyac = NYAC{ .instruction = .ImbueFrame, .return_addr = Unused, .op1 = NYACOperand{ .Label = func_ident_node.name }, .op2 = .{ .Register = Unused } };
+        try self.nyac_list.append(self.alloc, frame_nyac);
+        try self.emit(frame_nyac);
+
         // Should register parameters before compiling body
         if (root.nameParam.NameParameterNode.parameterList) |param_list| {
             const params = param_list.ParameterList.params;
-            for (params) |param| {
+            for (params, 0..) |param, index| {
                 if (param.* == .Declaration) {
-                    _ = try self.compile_expr(param);
+                    const slot = try self.compile_expr(param);
+
+                    // copy the incoming argument into the parameter's slot
+                    self.count += 1;
+                    const arg_reg = self.count;
+                    const param_nyac = NYAC{ .instruction = .Param, .return_addr = arg_reg, .op1 = NYACOperand{ .Value = Value{ .Number = @intCast(index) } }, .op2 = .{ .Register = Unused } };
+                    try self.nyac_list.append(self.alloc, param_nyac);
+                    try self.emit(param_nyac);
+
+                    const store_nyac = NYAC{ .instruction = .StoreRegister, .return_addr = slot, .op1 = NYACOperand{ .Register = arg_reg }, .op2 = .{ .Register = Unused } };
+                    try self.nyac_list.append(self.alloc, store_nyac);
+                    try self.emit(store_nyac);
                 }
             }
         }
 
         _ = try self.compile_expr(root.body);
+
+        // in case the function falls off the end without a return
+        const ret_nyac = NYAC{ .instruction = .Return, .return_addr = Unused, .op1 = NYACOperand{ .Register = Unused }, .op2 = .{ .Register = Unused } };
+        try self.nyac_list.append(self.alloc, ret_nyac);
+        try self.emit(ret_nyac);
 
         return Unused;
     }
@@ -773,12 +886,46 @@ pub const Compiler = struct {
         self.cur_line = if (root.location) |loc| loc.line else 0;
         const func_ident_node = root.name.Identifier;
 
-        const nyac = NYAC{ .instruction = .Goto, .return_addr = Unused, .op1 = NYACOperand{ .Label = func_ident_node.name }, .op2 = .{ .Register = Unused } };
+        // Compile every argument first, a nested call would clobber the argument registers
+        var arg_regs: std.ArrayList(Register) = .empty;
+        defer arg_regs.deinit(self.alloc);
+        if (root.args) |args| {
+            for (args.ArgumentList.args) |arg| {
+                try arg_regs.append(self.alloc, try self.compile_expr(arg));
+            }
+        }
+
+        for (arg_regs.items, 0..) |arg_reg, index| {
+            const arg_nyac = NYAC{ .instruction = .Arg, .return_addr = Unused, .op1 = NYACOperand{ .Register = arg_reg }, .op2 = .{ .Value = Value{ .Number = @intCast(index) } } };
+            try self.nyac_list.append(self.alloc, arg_nyac);
+            try self.emit(arg_nyac);
+        }
+
+        // the return value ends up in dest
+        self.count += 1;
+        const dest = self.count;
+        const nyac = NYAC{ .instruction = .Call, .return_addr = dest, .op1 = NYACOperand{ .Label = func_ident_node.name }, .op2 = .{ .Register = Unused } };
 
         try self.nyac_list.append(self.alloc, nyac);
         try self.emit(nyac);
 
-        return Unused;
+        return dest;
+    }
+
+    /// Byte offset of a struct field. The semantic analyzer uses C sizes, but the
+    /// backend keeps every value in 8 bytes, so field n goes at n * 8.
+    fn field_slot_offset(type_node: *ast.TypeNode, field_name: []const u8) !usize {
+        const fields = type_node.field_map orelse return CompileError.Invalid;
+        const field = fields.get(field_name) orelse return CompileError.Invalid;
+        const offset = field.offset orelse return CompileError.Invalid;
+
+        // fields declared before this one have smaller offsets
+        var index: usize = 0;
+        var it = fields.valueIterator();
+        while (it.next()) |other| {
+            if ((other.*.offset orelse 0) < offset) index += 1;
+        }
+        return index * 8;
     }
 
     pub fn create_init_list(self: *Compiler, root: *ast.InitializerListNode, base_reg: u32) !Register {
@@ -788,11 +935,12 @@ pub const Compiler = struct {
             self.count += 1;
             const offset_reg = self.count;
 
+            // every element/field is 8 bytes in the backend
             const offset_nyac = NYAC{
                 .instruction = .Add,
                 .return_addr = offset_reg,
                 .op1 = NYACOperand{ .Register = base_reg },
-                .op2 = NYACOperand{ .Value = Value{ .Number = @intCast(index) } },
+                .op2 = NYACOperand{ .Value = Value{ .Number = @intCast(index * 8) } },
             };
             try self.nyac_list.append(self.alloc, offset_nyac);
             try self.emit(offset_nyac);
@@ -815,8 +963,30 @@ pub const Compiler = struct {
 
     pub fn handle_translation_units(self: *Compiler, root: *ast.TranslationUnitListNode) !Register {
         self.cur_line = if (root.location) |loc| loc.line else 0;
+        // Global variables: their setup code has to run inside main, so pull it out
+        var global_init: std.ArrayList(NYAC) = .empty;
+        defer global_init.deinit(self.alloc);
+
         for (root.translationUnits) |unit| {
+            const start = self.nyac_list.items.len;
             _ = try self.compile_expr(unit);
+
+            if (unit.* != .Function) {
+                for (self.nyac_list.items[start..]) |*inst| {
+                    // tell the assembler this slot lives in .data, not on the stack
+                    if (inst.instruction == .ImbueRegister) inst.op2 = .{ .Label = "global" };
+                }
+                try global_init.appendSlice(self.alloc, self.nyac_list.items[start..]);
+                self.nyac_list.shrinkRetainingCapacity(start);
+            }
+        }
+
+        // put the global setup right after main's frame is set up
+        for (self.nyac_list.items, 0..) |inst, i| {
+            if (inst.instruction == .ImbueFrame and std.mem.eql(u8, inst.op1.Label, "main")) {
+                try self.nyac_list.insertSlice(self.alloc, i + 1, global_init.items);
+                break;
+            }
         }
 
         return Unused;
@@ -863,6 +1033,8 @@ pub const Compiler = struct {
     pub fn handle_prefix(self: *Compiler, root: *ast.PreFixNode) anyerror!Register {
         self.cur_line = if (root.location) |loc| loc.line else 0;
         const val_reg = try self.compile_expr(root.val);
+        if (root.val.* != .Identifier) return CompileError.UnsupportedNode;
+        const slot = self.var_registers.get(root.val.Identifier.name) orelse return CompileError.UndefinedVariable;
 
         // Determine the op
         const op = root.pre_op;
@@ -878,8 +1050,8 @@ pub const Compiler = struct {
         const one_reg = self.count;
 
         const one_nyac = NYAC{
-            .instruction = if (is_increment) .Add else .Subtract,
-            .op1 = .{ .Register = val_reg },
+            .instruction = .Constant,
+            .op1 = NYACOperand{ .Value = Value{ .Number = 1 } },
             .op2 = .{ .Register = Unused },
             .return_addr = one_reg,
         };
@@ -901,7 +1073,7 @@ pub const Compiler = struct {
         // Store back to the variable
         const store_nyac = NYAC{
             .instruction = .StoreRegister,
-            .return_addr = val_reg,
+            .return_addr = slot,
             .op1 = NYACOperand{ .Register = result_reg },
             .op2 = NYACOperand{ .Register = Unused },
         };
@@ -915,20 +1087,10 @@ pub const Compiler = struct {
 
     pub fn handle_postfix(self: *Compiler, root: *ast.PostFixNode) anyerror!Register {
         self.cur_line = if (root.location) |loc| loc.line else 0;
-        // Get the variable being modified
+        // Get the variable being modified, val_reg keeps the OLD value
         const val_reg = try self.compile_expr(root.val);
-
-        // POSTFIX: Save the OLD value first
-        self.count += 1;
-        const old_val_reg = self.count;
-        const save_nyac = NYAC{
-            .instruction = .StoreRegister,
-            .return_addr = old_val_reg,
-            .op1 = NYACOperand{ .Register = val_reg },
-            .op2 = NYACOperand{ .Register = Unused },
-        };
-        try self.nyac_list.append(self.alloc, save_nyac);
-        try self.emit(save_nyac);
+        if (root.val.* != .Identifier) return CompileError.UnsupportedNode;
+        const slot = self.var_registers.get(root.val.Identifier.name) orelse return CompileError.UndefinedVariable;
 
         // Determine the operation
         const op = root.post_op;
@@ -944,7 +1106,7 @@ pub const Compiler = struct {
         const one_reg = self.count;
         const one_nyac = NYAC{
             .instruction = .Constant,
-            .op1 = NYACOperand{ .Register = 1 },
+            .op1 = NYACOperand{ .Value = Value{ .Number = 1 } },
             .return_addr = one_reg,
             .op2 = NYACOperand{ .Register = Unused },
         };
@@ -966,7 +1128,7 @@ pub const Compiler = struct {
         // Store back to the variable
         const store_nyac = NYAC{
             .instruction = .StoreRegister,
-            .return_addr = val_reg,
+            .return_addr = slot,
             .op1 = NYACOperand{ .Register = result_reg },
             .op2 = NYACOperand{ .Register = Unused },
         };
@@ -975,7 +1137,7 @@ pub const Compiler = struct {
 
         // POSTFIX: Return the OLD value
         if (ast.debug_mode) std.debug.print("PostFix Node Emitted\n", .{});
-        return old_val_reg;
+        return val_reg;
     }
 
     pub fn handle_constant(self: *Compiler, root: *ast.ConstantNode) anyerror!Register {
@@ -1036,6 +1198,28 @@ pub const Compiler = struct {
         return dest;
     }
 
+    pub fn handle_string(self: *Compiler, root: *ast.StringNode) anyerror!Register {
+        self.cur_line = if (root.location) |loc| loc.line else 0;
+        self.count += 1;
+        const dest = self.count;
+
+        // the lexer keeps the quotes (and any trailing whitespace), strip both.
+        // Escapes like \n are left as-is for the assembler's .string directive.
+        const quoted = std.mem.trim(u8, root.raw_val, " \t\r\n");
+        const text = quoted[1 .. quoted.len - 1];
+        const nyac = NYAC{
+            .instruction = .Constant,
+            .op1 = NYACOperand{ .Value = Value{ .String = text } },
+            .return_addr = dest,
+            .op2 = NYACOperand{ .Register = Unused },
+        };
+        try self.nyac_list.append(self.alloc, nyac);
+        try self.emit(nyac);
+
+        if (ast.debug_mode) std.debug.print("String Node Emitted\n", .{});
+        return dest;
+    }
+
     pub fn handle_return(self: *Compiler, node: *ast.ReturnNode) anyerror!Register {
         self.cur_line = if (node.location) |nl| nl.line else 0;
         var return_reg = Unused;
@@ -1082,21 +1266,21 @@ pub const Compiler = struct {
 
     pub fn emit_jump_false(self: *Compiler, cond: Register, label: usize) !void {
         if (ast.debug_mode) std.debug.print("Label: {d} to emit\n", .{label});
-        const nyac = NYAC{ .instruction = .JumpFalse, .return_addr = Unused, .op1 = .{ .Register = cond }, .op2 = .{ .Label = "ElseBranch" } };
+        const nyac = NYAC{ .instruction = .JumpFalse, .return_addr = Unused, .op1 = .{ .Register = cond }, .op2 = .{ .Label = try self.label_name(label) } };
         try self.nyac_list.append(self.alloc, nyac);
         try self.emit(nyac);
     }
 
     pub fn emit_jump(self: *Compiler, label: usize) !void {
         if (ast.debug_mode) std.debug.print("Label: {d} to emit\n", .{label});
-        const nyac = NYAC{ .instruction = .Jump, .return_addr = Unused, .op1 = .{ .Label = "ThenBranch" }, .op2 = .{ .Register = Unused } };
+        const nyac = NYAC{ .instruction = .Jump, .return_addr = Unused, .op1 = .{ .Label = try self.label_name(label) }, .op2 = .{ .Register = Unused } };
         try self.nyac_list.append(self.alloc, nyac);
         try self.emit(nyac);
     }
 
     pub fn emit_label(self: *Compiler, label: usize) !void {
         if (ast.debug_mode) std.debug.print("Label: {d} to emit\n", .{label});
-        const nyac = NYAC{ .instruction = .Label, .return_addr = Unused, .op1 = .{ .Label = "End?Label" }, .op2 = .{ .Register = Unused } };
+        const nyac = NYAC{ .instruction = .Label, .return_addr = Unused, .op1 = .{ .Label = try self.label_name(label) }, .op2 = .{ .Register = Unused } };
         try self.nyac_list.append(self.alloc, nyac);
         try self.emit(nyac);
     }
@@ -1104,7 +1288,7 @@ pub const Compiler = struct {
     pub fn handle_expr_stmt(self: *Compiler, root: *ast.ExpressionStmtNode) anyerror!Register {
         self.cur_line = if (root.location) |loc| loc.line else 0;
         if (root.expr) |re| {
-            _ = try self.compile_expr(re);
+            return try self.compile_expr(re);
         }
         return Unused;
     }
@@ -1227,6 +1411,10 @@ pub const Compiler = struct {
             .GreaterEquals => "GTE",
             .LessEquals => "LTE",
             .Return => "RETURN",
+            .Call => "CALL",
+            .Arg => "ARG",
+            .Param => "PARAM",
+            .AddressOf => "ADDR",
             // else => "INVALID"
         });
 
@@ -1312,6 +1500,11 @@ pub const Compiler = struct {
         self.alloc.free(tmp);
         try writer.append(self.alloc, '\n');
     }
+    // Labels are named L0, L1, ... so every jump has a unique target
+    pub fn label_name(self: *Compiler, label: usize) ![]const u8 {
+        return try std.fmt.allocPrint(self.alloc, "L{d}", .{label});
+    }
+
     pub fn new_label(self: *Compiler) usize {
         const id = self.label_counter;
         self.label_counter += 1;
